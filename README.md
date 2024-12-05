@@ -1,6 +1,7 @@
 GAD Manager Overview
 
 GAD Manager is a tool designed for managing Global Active Device (GAD) pairs in Hitachi VSP storage systems. It offers an intuitive interface for:
+
 	•	Monitoring the status of GAD pairs.
 	•	Performing key operations such as split, swap, and resync.
 	•	Generating HORCM configuration files.
