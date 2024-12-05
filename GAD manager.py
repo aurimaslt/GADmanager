@@ -5,10 +5,8 @@ from dataclasses import dataclass
 from typing import List, Dict, Optional
 from enum import Enum
 from PyQt5.QtWidgets import *
-from PyQt5.QtCore import Qt, QSize, QThread, pyqtSignal, QObject, QDate
+from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QFont, QIcon, QPalette, QColor
-from PyQt5.QtCore import QSettings
-import requests
 
 class GadStatus(Enum):
     PAIR = "PAIR"       # Sinchronizuota pora
@@ -826,31 +824,6 @@ HORCM_INST
         else:
             super().keyPressEvent(event)
 
-class UpdateChecker(QObject):
-    update_available = pyqtSignal(str)
-    no_update_available = pyqtSignal()
-
-    def __init__(self, repo_url: str):
-        super().__init__()
-        self.repo_url = repo_url
-        self.settings = QSettings("GADManager", "UpdateSettings")
-
-    def check_for_updates(self):
-        try:
-            response = requests.get(f"{self.repo_url}/releases/latest")
-            if response.status_code == 200:
-                latest_release = response.json()
-                latest_version = latest_release['tag_name']
-                current_version = "0.19 beta"  # Replace with the actual current version
-                if latest_version > current_version:
-                    self.update_available.emit(latest_version)
-                else:
-                    self.no_update_available.emit()
-            else:
-                self.no_update_available.emit()
-        except Exception as e:
-            self.no_update_available.emit()
-
 class OutputParserFrame(QWidget):
    def __init__(self, parent=None, callback=None):
       super().__init__(parent)
@@ -875,19 +848,19 @@ class OutputParserFrame(QWidget):
 
       button_layout = QHBoxLayout()
       button_layout.addStretch(1)
-
+      
       # Komanda ir Copy mygtukas
       cmd_label = QLabel("pairdisplay -g GROUP -CLI -IH10")
       cmd_label.setStyleSheet("font-family: monospace; padding: 4px; color: #0052cc;")
       button_layout.addWidget(cmd_label)
-
+      
       copy_btn = QPushButton("📋 Copy Pairdisplay")
       copy_btn.setFixedWidth(150)
       copy_btn.clicked.connect(lambda: self.copy_command())
       button_layout.addWidget(copy_btn)
-
+      
       button_layout.addSpacing(10)  # Tarpas tarp mygtukų grupių
-
+      
       # Kiti mygtukai
       help_btn = QPushButton("❓ Show Example")
       help_btn.clicked.connect(self.show_example)
@@ -901,7 +874,7 @@ class OutputParserFrame(QWidget):
       paste_btn.setProperty("class", "primary")
       paste_btn.clicked.connect(lambda: self.parse_clipboard(True))
       button_layout.addWidget(paste_btn)
-
+      
       button_layout.addStretch(1)
       layout.addLayout(button_layout)
 
@@ -916,7 +889,7 @@ class OutputParserFrame(QWidget):
       msg = QMessageBox()
       msg.setWindowTitle("Example Output")
       msg.setText("Example of the expected pairdisplay output format:")
-
+      
       example = """Group   PairVol(L/R) (Port#,TID, LU),Seq#,LDEV#.P/S,Status,Fence,   %,P-LDEV# M CTG JID AP EM       E-Seq# E-LDEV# R/W QM DM P PR CS D_Status ST ELV PGID           CT(s) LUT
 HDID    GAD_TEST_HA(L) (CL8-F-8, 0,   5)445329  6001.P-VOL PSUS NEVER ,  100  6001 -   -   0  4  -            -       - B/B -  D  N D   3 -         - -      -               - -
 HDID    GAD_TEST_HA(R) (CL8-F-12, 0,   5)445317  6001.S-VOL SSWS NEVER ,  100  6001 -   -   0  4  -            -       - L/L -  D  N D   3 -         - -      -               - -
@@ -926,13 +899,13 @@ HDID    GAD_TEST_HA(L) (CL8-F-8, 0,   5)445329  6001.P-VOL PSUS NEVER ,  100  60
 HDID    GAD_TEST_HA(R) (CL8-F-12, 0,   5)445317  6001.S-VOL SSWS NEVER ,  100  6001 -   -   0  4  -            -       - L/L -  D  N D   3 -         - -      -               - -
 HDID2    GAD_TEST_HA2(L) (CL8-F-8, 0,   5)445329  6002.P-VOL PAIR NEVER ,  100  6002 -   -   0  4  -            -       - L/L -  D  N D   3 -         - -      -               - -
 HDID2    GAD_TEST_HA2(R) (CL8-F-12, 0,   5)445317  6002.S-VOL PAIR NEVER ,  100  6002 -   -   0  4  -            -       - L/L -  D  N D   3 -         - -      -               - -"""
-
+      
       text_edit = QTextEdit()
       text_edit.setPlainText(example)
       text_edit.setReadOnly(True)
       text_edit.setMinimumWidth(850)
       text_edit.setMinimumHeight(10)
-
+      
       layout = msg.layout()
       layout.addWidget(text_edit, 1, 0, 1, layout.columnCount())
       msg.exec_()
@@ -967,30 +940,30 @@ HDID2    GAD_TEST_HA2(R) (CL8-F-12, 0,   5)445317  6002.S-VOL PAIR NEVER ,  100 
          QMessageBox.critical(self, "Error", f"Failed to analyze output: {str(e)}")
 
    def _parse_pairdisplay(self, text: str) -> List[GADPair]:
-      lines = [line.strip() for line in text.split('\n')
+      lines = [line.strip() for line in text.split('\n') 
             if line.strip() and not line.startswith('Group')]
-
+      
       pairs = []
       for i in range(0, len(lines), 2):
          if i + 1 >= len(lines):
             break
-
+            
          left_line = lines[i]
          right_line = lines[i + 1]
-
+         
          try:
             match = re.match(r'(\w+)\s+([\w_]+)', left_line)
             group, name = match.groups()
-
+            
             left_serial = re.search(r'(\d{6})', left_line).group(1)
             right_serial = re.search(r'(\d{6})', right_line).group(1)
-
+            
             left_ldev = re.search(r'(\d+)\.(P|S)-VOL', left_line)
             right_ldev = re.search(r'(\d+)\.(P|S)-VOL', right_line)
-
+            
             left_status = next(s for s in left_line.split() if s in ['PAIR', 'PSUS', 'SSUS', 'SSWS', 'PSUE', 'COPY'])
             right_status = next(s for s in right_line.split() if s in ['PAIR', 'PSUS', 'SSUS', 'SSWS', 'PSUE', 'COPY'])
-
+            
             left_rw = re.search(r'([BL]/[BLM])', left_line).group(1)
             right_rw = re.search(r'([BL]/[BLM])', right_line).group(1)
 
@@ -998,7 +971,7 @@ HDID2    GAD_TEST_HA2(R) (CL8-F-12, 0,   5)445317  6002.S-VOL PAIR NEVER ,  100 
                serial_number=left_serial,
                host=self._extract_port_info(left_line) or '',
                ldev_number=left_ldev.group(1),
-               status=left_status,
+               status=left_status, 
                role=f"{left_ldev.group(2)}-VOL",
                rw_status=left_rw,
                instance='-IH10'
@@ -1016,7 +989,7 @@ HDID2    GAD_TEST_HA2(R) (CL8-F-12, 0,   5)445317  6002.S-VOL PAIR NEVER ,  100 
 
             pairs.append(GADPair(group=group, name=name,
                      left_storage=left_storage, right_storage=right_storage))
-
+            
          except Exception as e:
             raise ValueError(f"Parsing error: {str(e)}\nLeft: {left_line}\nRight: {right_line}")
 
@@ -1087,26 +1060,26 @@ class HelpDialog(QDialog):
                 min-width: 80px;
             }
         """)
-
+        
         layout = QVBoxLayout(self)
-
+        
         # Sukuriame Tab widget pagalbos skyriams
         tabs = QTabWidget()
-
+        
         # Bendros informacijos tab
         general_tab = QWidget()
         general_layout = QVBoxLayout(general_tab)
-
+        
         general_text = """
         <h3>GAD Manager Overview</h3>
-        <p>GAD Manager is a tool for managing Global Active Device (GAD) pairs in Hitachi VSP storage systems.
+        <p>GAD Manager is a tool for managing Global Active Device (GAD) pairs in Hitachi VSP storage systems. 
         It provides an intuitive interface for:</p>
         <ul>
             <li>Monitoring GAD pair status</li>
             <li>Managing pair operations (split, swap, resync)</li>
             <li>Generating HORCM configuration files</li>
         </ul>
-
+        
         <h3>Main Features</h3>
         <ul>
             <li>Real-time status monitoring of GAD pairs</li>
@@ -1115,31 +1088,31 @@ class HelpDialog(QDialog):
             <li>Automated HORCM configuration generation</li>
         </ul>
         """
-
+        
         general_info = QLabel(general_text)
         general_info.setWordWrap(True)
         general_info.setTextFormat(Qt.RichText)
         general_layout.addWidget(general_info)
         general_layout.addStretch()
-
+        
         # Operations tab
         operations_tab = QWidget()
         operations_layout = QVBoxLayout(operations_tab)
-
+        
         operations_text = """
         <h3>Available Operations</h3>
-
+        
         <h4>Split Operations</h4>
         <p><b>Split VSP1:</b> Suspends the pair from the primary storage system</p>
         <p><b>Split VSP2:</b> Suspends the pair from the secondary storage system</p>
-
+        
         <h4>Swap Operations</h4>
         <p><b>Swap P→S:</b> Swaps the P-VOL to S-VOL role</p>
         <p><b>Swap S→P:</b> Swaps the S-VOL to P-VOL role</p>
-
+        
         <h4>Resync Operation</h4>
         <p><b>Resync:</b> Resynchronizes a suspended pair</p>
-
+        
         <h3>Status Indicators</h3>
         <p><b>PAIR:</b> Volumes are synchronized</p>
         <p><b>PSUS:</b> Pair suspended from primary side</p>
@@ -1148,21 +1121,21 @@ class HelpDialog(QDialog):
         <p><b>PSUE:</b> Pair suspended due to error</p>
         <p><b>COPY:</b> Initial copy in progress</p>
         """
-
+        
         operations_info = QLabel(operations_text)
         operations_info.setWordWrap(True)
         operations_info.setTextFormat(Qt.RichText)
         operations_layout.addWidget(operations_info)
         operations_layout.addStretch()
-
+        
         # HORCM tab
         horcm_tab = QWidget()
         horcm_layout = QVBoxLayout(horcm_tab)
-
+        
         horcm_text = """
         <h3>HORCM Configuration</h3>
         <p>The HORCM Generator helps you create configuration files for both primary and secondary instances:</p>
-
+        
         <h4>Required Information</h4>
         <ul>
             <li>HORCM server IP address</li>
@@ -1171,34 +1144,34 @@ class HelpDialog(QDialog):
             <li>Device group information</li>
             <li>LDEV numbers</li>
         </ul>
-
+        
         <h4>Generated Files</h4>
         <p>The tool generates two configuration files:</p>
         <ul>
             <li><b>horcm10.conf:</b> Primary instance configuration</li>
             <li><b>horcm20.conf:</b> Secondary instance configuration</li>
         </ul>
-
+        
         <h4>Shortcuts</h4>
         <ul>
             <li><b>Ctrl+S:</b> Save configuration files</li>
             <li><b>Ctrl+P:</b> Preview configurations</li>
         </ul>
         """
-
+        
         horcm_info = QLabel(horcm_text)
         horcm_info.setWordWrap(True)
         horcm_info.setTextFormat(Qt.RichText)
         horcm_layout.addWidget(horcm_info)
         horcm_layout.addStretch()
-
+        
         # Pridedame tabs
         tabs.addTab(general_tab, "General")
         tabs.addTab(operations_tab, "Operations")
         tabs.addTab(horcm_tab, "HORCM Config")
-
+        
         layout.addWidget(tabs)
-
+        
         # Mygtukai
         button_box = QDialogButtonBox(QDialogButtonBox.Ok)
         button_box.accepted.connect(self.accept)
@@ -1232,10 +1205,10 @@ class AboutDialog(QDialog):
                 text-decoration: underline;
             }
         """)
-
+        
         layout = QVBoxLayout(self)
         layout.setSpacing(20)
-
+        
         # Logo
         logo_label = QLabel()
         icon = QIcon("icon.svg")
@@ -1243,7 +1216,7 @@ class AboutDialog(QDialog):
         logo_label.setPixmap(pixmap)
         logo_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(logo_label)
-
+        
         # Title
         title = QLabel("GAD Manager")
         title.setStyleSheet("""
@@ -1253,7 +1226,7 @@ class AboutDialog(QDialog):
         """)
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
-
+        
         # Versijos informacija
         version_info = QLabel("""
             <p style='text-align: center;'>
@@ -1264,7 +1237,7 @@ class AboutDialog(QDialog):
         version_info.setTextFormat(Qt.RichText)
         version_info.setAlignment(Qt.AlignCenter)
         layout.addWidget(version_info)
-
+        
         # Aprašymas
         description = QLabel("""
             <p style='text-align: center;'>
@@ -1280,7 +1253,7 @@ class AboutDialog(QDialog):
         description.setAlignment(Qt.AlignCenter)
         description.setOpenExternalLinks(True)  # Pridėta ši eilutė
         layout.addWidget(description)
-
+        
         # Kontaktinė informacija
         contact_info = QLabel("""
             <p style='text-align: center; color: #666;'>
@@ -1294,9 +1267,9 @@ class AboutDialog(QDialog):
         contact_info.setAlignment(Qt.AlignCenter)
         contact_info.setOpenExternalLinks(True)
         layout.addWidget(contact_info)
-
+        
         layout.addStretch()
-
+        
         # OK mygtukas
         button_box = QDialogButtonBox(QDialogButtonBox.Ok)
         button_box.accepted.connect(self.accept)
@@ -1317,7 +1290,6 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.copy_controller = CopyProgress()
         self.pairs = []
-        self.settings = QSettings("GADManager", "UpdateSettings")  # Pridedame settings atributą
         self.init_ui()
 
     def init_ui(self):
@@ -1328,18 +1300,18 @@ class MainWindow(QMainWindow):
         # Nustatome programos ikoną
         self.setWindowIcon(QIcon("icon.svg"))
 
-        # Sukuriame meniu juostą
+        #Sukuriame meniu juostą
         menubar = self.menuBar()
 
         # Help meniu
         help_menu = menubar.addMenu('Help')
-
+        
         # Help veiksmą
         help_action = QAction('Help Contents', self)
         help_action.setShortcut('F1')
         help_action.triggered.connect(self.show_help)
         help_menu.addAction(help_action)
-
+        
         # About veiksmą
         about_action = QAction('About', self)
         about_action.triggered.connect(self.show_about)
@@ -1404,17 +1376,6 @@ class MainWindow(QMainWindow):
 
         # Status bar
         self.statusBar().showMessage("Ready")
-
-        # Pridedame mygtuką atnaujinimams
-        self.check_updates_btn = QPushButton("Check for Updates")
-        self.check_updates_btn.clicked.connect(self.check_for_updates)
-        self.statusBar().addPermanentWidget(self.check_updates_btn)
-
-        # Sukuriame UpdateChecker objektą
-        self.update_checker = UpdateChecker("https://github.com/aurimasles/GADmanager")
-
-        # Nustatome kasdienį atnaujinimų patikrinimą
-        self.check_for_updates_daily()
 
     def update_from_parser(self, new_pairs: List[GADPair]):
         """Atnaujina porų informaciją iš parserio"""
@@ -1484,33 +1445,6 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Status refreshed")
         else:
             self.statusBar().showMessage("No pairs to refresh")
-
-    def check_for_updates(self):
-        """Tikrina ar yra naujausi atnaujinimai"""
-        self.statusBar().showMessage("Checking for updates...")
-        self.update_checker.update_available.connect(self.show_update_available)
-        self.update_checker.no_update_available.connect(self.show_no_update_available)
-        self.update_checker.check_for_updates()
-
-    def show_update_available(self, latest_version: str):
-        """Rodo pranešimą, jei yra naujesnė versija"""
-        QMessageBox.information(self, "Update Available",
-                               f"A new version {latest_version} is available. Please update the application.")
-        self.statusBar().showMessage("Update available")
-
-    def show_no_update_available(self):
-        """Rodo pranešimą, jei nėra naujesnės versijos"""
-        QMessageBox.information(self, "No Update Available",
-                                "You are using the latest version of the application.")
-        self.statusBar().showMessage("No update available")
-
-    def check_for_updates_daily(self):
-        """Automatiškai tikrina atnaujinimus kasdien"""
-        current_date = QDate.currentDate()
-        last_check_date = self.settings.value("last_update_check_date", QDate(2000, 1, 1))
-        if current_date > last_check_date:
-            self.check_for_updates()
-            self.settings.setValue("last_update_check_date", current_date)
 
 def main():
     app = QApplication(sys.argv)
