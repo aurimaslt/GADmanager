@@ -1,3 +1,9 @@
+################################
+# Version info
+################################
+APP_VERSION = "0.21 beta"
+APP_RELEASE_DATE = "2024-02-15"
+################################
 import os
 import sys
 import re
@@ -124,7 +130,7 @@ class UpdateController:
     """Atnaujinimų valdymo kontroleris"""
     def __init__(self, parent_window):
         self.parent_window = parent_window
-        self.app_version = "0.21 beta"
+        self.app_version = APP_VERSION
         self.init_auto_updater()
         
     def init_auto_updater(self):
@@ -1134,10 +1140,10 @@ class AboutDialog(QDialog):
         layout.addWidget(title)
         
         # Versijos informacija
-        version_info = QLabel("""
+        version_info = QLabel(f"""
             <p style='text-align: center;'>
-            Version 0.21 beta<br>
-            Release Date: 2024-02-15<br>
+            Version {APP_VERSION}<br>
+            Release Date: {APP_RELEASE_DATE}<br>
             </p>
         """)
         version_info.setTextFormat(Qt.RichText)
@@ -1590,7 +1596,7 @@ class MainWindow(QMainWindow):
         self.gad_controller = GADController()
 
     def init_ui(self):
-        self.setWindowTitle("GAD Manager 0.21 beta")
+        self.setWindowTitle(f"GAD Manager {APP_VERSION}")
         self.setMinimumSize(1400, 750)
         self.setStyleSheet(ProStyle.STYLE)
 
