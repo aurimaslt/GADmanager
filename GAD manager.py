@@ -1,12 +1,288 @@
+import os
 import sys
 import re
+import tempfile
+import requests
+import hashlib
+from datetime import datetime
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import List, Dict, Optional
 from enum import Enum
 from PyQt5.QtWidgets import *
-from PyQt5.QtCore import Qt, QSize
+from PyQt5.QtCore import Qt, QSize, QThread, pyqtSignal
 from PyQt5.QtGui import QFont, QIcon, QPalette, QColor
+
+@dataclass
+class GithubReleaseInfo:
+    """GitHub Release information structure"""
+    version: str
+    release_date: str
+    download_url: str
+    changelog: str
+    is_prerelease: bool
+
+class GithubUpdateChecker:
+    """Checks for available updates using GitHub API"""
+    def __init__(self, current_version: str, repo_owner: str, repo_name: str):
+        self.current_version = current_version
+        self.api_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/releases"
+        
+    def _parse_version(self, version: str) -> tuple:
+        """Converts version string to comparable tuple"""
+        # Remove 'beta' suffix if present
+        version = version.split(' ')[0]
+        return tuple(map(int, version.split('.')))
+    
+    def check_for_updates(self) -> Optional[GithubReleaseInfo]:
+        """Checks if a new version is available on GitHub"""
+        try:
+            headers = {'Accept': 'application/vnd.github.v3+json'}
+            response = requests.get(self.api_url, headers=headers, timeout=5)
+            response.raise_for_status()
+            
+            releases = response.json()
+            if not releases:
+                return None
+                
+            # Get latest release (including pre-releases)
+            latest_release = releases[0]
+            latest_version = latest_release['tag_name'].lstrip('v')
+            
+            if self._parse_version(latest_version) > self._parse_version(self.current_version):
+                # Find the .zip asset
+                zip_asset = next(
+                    (asset for asset in latest_release['assets'] 
+                     if asset['name'].endswith('.zip')),
+                    None
+                )
+                
+                if not zip_asset:
+                    return None
+                    
+                return GithubReleaseInfo(
+                    version=latest_version,
+                    release_date=latest_release['published_at'].split('T')[0],
+                    download_url=zip_asset['browser_download_url'],
+                    changelog=latest_release['body'],
+                    is_prerelease=latest_release['prerelease']
+                )
+            return None
+            
+        except Exception as e:
+            print(f"Error checking for updates: {e}")
+            return None
+
+class UpdateDownloader(QThread):
+    """Downloads updates in a separate thread"""
+    progress = pyqtSignal(int)
+    finished = pyqtSignal(bool, str)
+    
+    def __init__(self, url: str, save_path: str):
+        super().__init__()
+        self.url = url
+        self.save_path = save_path
+        
+    def run(self):
+        try:
+            response = requests.get(self.url, stream=True)
+            response.raise_for_status()
+            
+            total_size = int(response.headers.get('content-length', 0))
+            block_size = 1024
+            downloaded = 0
+            
+            with open(self.save_path, 'wb') as f:
+                for data in response.iter_content(block_size):
+                    downloaded += len(data)
+                    f.write(data)
+                    if total_size:
+                        progress = int((downloaded / total_size) * 100)
+                        self.progress.emit(progress)
+                        
+            self.finished.emit(True, "")
+            
+        except Exception as e:
+            self.finished.emit(False, str(e))
+
+class UpdateInstaller:
+    """Handles the update installation process"""
+    def __init__(self, temp_dir: str, backup_dir: str):
+        self.temp_dir = temp_dir
+        self.backup_dir = backup_dir
+        
+    def backup_current_version(self):
+        """Creates backup of current version"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = os.path.join(self.backup_dir, f"backup_{timestamp}")
+        os.makedirs(backup_path, exist_ok=True)
+        
+        # Backup current directory files
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        for file in os.listdir(current_dir):
+            if file.endswith(('.py', '.svg', '.exe')):
+                src_path = os.path.join(current_dir, file)
+                dst_path = os.path.join(backup_path, file)
+                if os.path.isfile(src_path):
+                    with open(src_path, 'rb') as src, open(dst_path, 'wb') as dst:
+                        dst.write(src.read())
+                        
+        return backup_path
+    
+    def install_update(self, update_file: str) -> bool:
+        """Installs the update"""
+        try:
+            # Create backup
+            backup_path = self.backup_current_version()
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            
+            # Extract update
+            import zipfile
+            with zipfile.ZipFile(update_file, 'r') as zip_ref:
+                # Extract to temp directory first
+                zip_ref.extractall(self.temp_dir)
+                
+                # Move files to current directory
+                for file in os.listdir(self.temp_dir):
+                    src_path = os.path.join(self.temp_dir, file)
+                    dst_path = os.path.join(current_dir, file)
+                    if os.path.isfile(src_path):
+                        with open(src_path, 'rb') as src, open(dst_path, 'wb') as dst:
+                            dst.write(src.read())
+            
+            return True
+            
+        except Exception as e:
+            print(f"Error installing update: {e}")
+            # Attempt rollback
+            self.rollback(backup_path)
+            return False
+    
+    def rollback(self, backup_path: str):
+        """Rolls back to backup if update fails"""
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        for file in os.listdir(backup_path):
+            src_path = os.path.join(backup_path, file)
+            dst_path = os.path.join(current_dir, file)
+            if os.path.isfile(src_path):
+                with open(src_path, 'rb') as src, open(dst_path, 'wb') as dst:
+                    dst.write(src.read())
+
+class UpdateDialog(QDialog):
+    """Update progress dialog"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Software Update")
+        self.setModal(True)
+        self.setup_ui()
+        
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        
+        self.status_label = QLabel("Downloading update...")
+        layout.addWidget(self.status_label)
+        
+        self.progress_bar = QProgressBar()
+        layout.addWidget(self.progress_bar)
+        
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(self.reject)
+        layout.addWidget(self.cancel_button)
+        
+    def update_progress(self, value: int):
+        self.progress_bar.setValue(value)
+        
+    def set_status(self, text: str):
+        self.status_label.setText(text)
+
+class GithubAutoUpdater:
+    """Main GitHub-based auto-update controller"""
+    def __init__(self, app_version: str, repo_owner: str, repo_name: str):
+        self.app_version = app_version
+        self.repo_owner = repo_owner
+        self.repo_name = repo_name
+        self.temp_dir = tempfile.mkdtemp()
+        self.backup_dir = os.path.join(os.path.expanduser("~"), ".gadmanager", "backups")
+        os.makedirs(self.backup_dir, exist_ok=True)
+        
+    def check_and_update(self, parent=None) -> bool:
+        """Checks for updates and performs update if available"""
+        checker = GithubUpdateChecker(self.app_version, self.repo_owner, self.repo_name)
+        release_info = checker.check_for_updates()
+        
+        if not release_info:
+            return False
+            
+        # Add prerelease warning if applicable
+        prerelease_warning = "\n\nNOTE: This is a pre-release version!" if release_info.is_prerelease else ""
+            
+        response = QMessageBox.question(
+            parent,
+            "Update Available",
+            f"Version {release_info.version} is available.\n\n"
+            f"Release Date: {release_info.release_date}\n\n"
+            f"Changelog:\n{release_info.changelog}\n"
+            f"{prerelease_warning}\n\n"
+            "Would you like to update now?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        
+        if response == QMessageBox.Yes:
+            return self._perform_update(release_info, parent)
+            
+        return False
+    
+    def _perform_update(self, release_info: GithubReleaseInfo, parent) -> bool:
+        """Performs the actual update process"""
+        dialog = UpdateDialog(parent)
+        
+        # Download update
+        temp_file = os.path.join(self.temp_dir, "update.zip")
+        downloader = UpdateDownloader(release_info.download_url, temp_file)
+        
+        downloader.progress.connect(dialog.update_progress)
+        downloader.finished.connect(lambda success, error: self._handle_download_finished(
+            success, error, dialog, temp_file
+        ))
+        
+        downloader.start()
+        result = dialog.exec_()
+        
+        if result == QDialog.Rejected:
+            downloader.terminate()
+            return False
+            
+        return True
+    
+    def _handle_download_finished(self, success: bool, error: str, 
+                                dialog: UpdateDialog, temp_file: str):
+        """Handles download completion"""
+        if not success:
+            QMessageBox.critical(dialog, "Error", f"Download failed: {error}")
+            dialog.reject()
+            return
+            
+        dialog.set_status("Installing update...")
+        
+        installer = UpdateInstaller(self.temp_dir, self.backup_dir)
+        
+        if installer.install_update(temp_file):
+            QMessageBox.information(
+                dialog,
+                "Update Complete",
+                "The update has been installed successfully.\n"
+                "Please restart the application to apply the changes."
+            )
+            dialog.accept()
+        else:
+            QMessageBox.critical(
+                dialog,
+                "Update Failed",
+                "Failed to install the update.\n"
+                "The previous version has been restored."
+            )
+            dialog.reject()
+
 
 class GadStatus(Enum):
     PAIR = "PAIR"       # Sinchronizuota pora
@@ -1288,6 +1564,13 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        # Auto-updater initialization
+        self.app_version = "0.19 beta"
+        self.auto_updater = GithubAutoUpdater(
+            self.app_version,
+            "aurimaslt",
+            "GADmanager"
+        )
         self.copy_controller = CopyProgress()
         self.pairs = []
         self.init_ui()
@@ -1300,11 +1583,15 @@ class MainWindow(QMainWindow):
         # Nustatome programos ikoną
         self.setWindowIcon(QIcon("icon.svg"))
 
-        #Sukuriame meniu juostą
+        # Sukuriame meniu juostą
         menubar = self.menuBar()
 
         # Help meniu
         help_menu = menubar.addMenu('Help')
+        
+        # Check for Updates action
+        check_updates_action = help_menu.addAction('Check for Updates')
+        check_updates_action.triggered.connect(self.check_for_updates)
         
         # Help veiksmą
         help_action = QAction('Help Contents', self)
@@ -1320,6 +1607,10 @@ class MainWindow(QMainWindow):
         # Create main widget and layout
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
+
+        # Main layout
+        main_layout = QVBoxLayout(main_widget)
+        main_layout.setSpacing(0)
 
         # Tab widget
         self.tab_widget = QTabWidget()
@@ -1348,16 +1639,20 @@ class MainWindow(QMainWindow):
         # Įdedame konteinerį į pagrindinį išdėstymą
         pairs_layout.addWidget(top_container)
 
-        # Perduodame Command Output nuorodą
-        self.parser.set_command_output(self.cmd_output)
-
-        # GAD Pairs konteineris
-        self.pairs_container = QVBoxLayout()
-        self.pairs_container.setSpacing(0)
-        pairs_layout.addLayout(self.pairs_container)
-
-        # Pridedame "stretch" kad elementai būtų viršuje
-        pairs_layout.addStretch()
+        # Sukuriame scroll area GAD poroms
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        
+        # Scroll widget su container
+        scroll_widget = QWidget()
+        self.pairs_container = QVBoxLayout(scroll_widget)
+        self.pairs_container.setSpacing(4)
+        self.pairs_container.setContentsMargins(8, 8, 8, 8)
+        
+        scroll_area.setWidget(scroll_widget)
+        pairs_layout.addWidget(scroll_area)
 
         # HORCM tab
         self.horcm_tab = QWidget()
@@ -1369,9 +1664,7 @@ class MainWindow(QMainWindow):
         self.tab_widget.addTab(self.pairs_tab, "GAD Pairs")
         self.tab_widget.addTab(self.horcm_tab, "HORCM Generator")
 
-        # Main layout
-        main_layout = QVBoxLayout(main_widget)
-        main_layout.setSpacing(0)
+        # Add tab widget to main layout
         main_layout.addWidget(self.tab_widget)
 
         # Status bar
@@ -1445,6 +1738,14 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Status refreshed")
         else:
             self.statusBar().showMessage("No pairs to refresh")
+
+    def check_for_updates(self):
+        """Checks for and performs update if available"""
+        self.statusBar().showMessage("Checking for updates...")
+        if not self.auto_updater.check_and_update(self):
+            self.statusBar().showMessage("No updates available")
+        else:
+            self.statusBar().showMessage("Update completed - please restart")
 
 def main():
     app = QApplication(sys.argv)
