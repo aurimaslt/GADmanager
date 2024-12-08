@@ -1,3 +1,9 @@
+################################
+# Version info
+################################
+APP_VERSION = "0.21 beta"
+APP_RELEASE_DATE = "2024-12-08"
+################################
 import os
 import sys
 import re
@@ -22,321 +28,6 @@ class GithubReleaseInfo:
     changelog: str
     is_prerelease: bool
 
-class GithubUpdateChecker:
-    """Checks for available updates using GitHub API"""
-    def __init__(self, current_version: str, repo_owner: str, repo_name: str):
-        self.current_version = current_version
-        self.api_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/releases"
-        
-    def _parse_version(self, version: str) -> tuple:
-        """Converts version string to comparable tuple"""
-        # Remove 'beta' suffix if present
-        version = version.split(' ')[0]
-        return tuple(map(int, version.split('.')))
-    
-    def check_for_updates(self) -> Optional[GithubReleaseInfo]:
-        """Checks if a new version is available on GitHub"""
-        try:
-            headers = {'Accept': 'application/vnd.github.v3+json'}
-            response = requests.get(self.api_url, headers=headers, timeout=5)
-            response.raise_for_status()
-            
-            releases = response.json()
-            if not releases:
-                return None
-                
-            # Get latest release (including pre-releases)
-            latest_release = releases[0]
-            latest_version = latest_release['tag_name'].lstrip('v')
-            
-            if self._parse_version(latest_version) > self._parse_version(self.current_version):
-                # Find the .zip asset
-                zip_asset = next(
-                    (asset for asset in latest_release['assets'] 
-                     if asset['name'].endswith('.zip')),
-                    None
-                )
-                
-                if not zip_asset:
-                    return None
-                    
-                return GithubReleaseInfo(
-                    version=latest_version,
-                    release_date=latest_release['published_at'].split('T')[0],
-                    download_url=zip_asset['browser_download_url'],
-                    changelog=latest_release['body'],
-                    is_prerelease=latest_release['prerelease']
-                )
-            return None
-            
-        except Exception as e:
-            print(f"Error checking for updates: {e}")
-            return None
-
-class UpdateDownloader(QThread):
-    """Downloads updates in a separate thread"""
-    progress = pyqtSignal(int)
-    finished = pyqtSignal(bool, str)
-    
-    def __init__(self, url: str, save_path: str):
-        super().__init__()
-        self.url = url
-        self.save_path = save_path
-        
-    def run(self):
-        try:
-            response = requests.get(self.url, stream=True)
-            response.raise_for_status()
-            
-            total_size = int(response.headers.get('content-length', 0))
-            block_size = 1024
-            downloaded = 0
-            
-            with open(self.save_path, 'wb') as f:
-                for data in response.iter_content(block_size):
-                    downloaded += len(data)
-                    f.write(data)
-                    if total_size:
-                        progress = int((downloaded / total_size) * 100)
-                        self.progress.emit(progress)
-                        
-            self.finished.emit(True, "")
-            
-        except Exception as e:
-            self.finished.emit(False, str(e))
-
-class UpdateInstaller:
-    """Handles the update installation process"""
-    def __init__(self, temp_dir: str, backup_dir: str):
-        self.temp_dir = temp_dir
-        self.backup_dir = backup_dir
-        
-    def backup_current_version(self):
-        """Creates backup of current version"""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = os.path.join(self.backup_dir, f"backup_{timestamp}")
-        os.makedirs(backup_path, exist_ok=True)
-        
-        # Backup current directory files
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        for file in os.listdir(current_dir):
-            if file.endswith(('.py', '.svg', '.exe')):
-                src_path = os.path.join(current_dir, file)
-                dst_path = os.path.join(backup_path, file)
-                if os.path.isfile(src_path):
-                    with open(src_path, 'rb') as src, open(dst_path, 'wb') as dst:
-                        dst.write(src.read())
-                        
-        return backup_path
-    
-    def install_update(self, update_file: str) -> bool:
-        """Installs the update"""
-        try:
-            # Create backup
-            backup_path = self.backup_current_version()
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            
-            # Extract update
-            import zipfile
-            with zipfile.ZipFile(update_file, 'r') as zip_ref:
-                # Extract to temp directory first
-                zip_ref.extractall(self.temp_dir)
-                
-                # Move files to current directory
-                for file in os.listdir(self.temp_dir):
-                    src_path = os.path.join(self.temp_dir, file)
-                    dst_path = os.path.join(current_dir, file)
-                    if os.path.isfile(src_path):
-                        with open(src_path, 'rb') as src, open(dst_path, 'wb') as dst:
-                            dst.write(src.read())
-            
-            return True
-            
-        except Exception as e:
-            print(f"Error installing update: {e}")
-            # Attempt rollback
-            self.rollback(backup_path)
-            return False
-    
-    def rollback(self, backup_path: str):
-        """Rolls back to backup if update fails"""
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        for file in os.listdir(backup_path):
-            src_path = os.path.join(backup_path, file)
-            dst_path = os.path.join(current_dir, file)
-            if os.path.isfile(src_path):
-                with open(src_path, 'rb') as src, open(dst_path, 'wb') as dst:
-                    dst.write(src.read())
-
-class UpdateDialog(QDialog):
-    """Update progress dialog"""
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Software Update")
-        self.setModal(True)
-        self.setup_ui()
-        
-    def setup_ui(self):
-        layout = QVBoxLayout(self)
-        
-        self.status_label = QLabel("Downloading update...")
-        layout.addWidget(self.status_label)
-        
-        self.progress_bar = QProgressBar()
-        layout.addWidget(self.progress_bar)
-        
-        self.cancel_button = QPushButton("Cancel")
-        self.cancel_button.clicked.connect(self.reject)
-        layout.addWidget(self.cancel_button)
-        
-    def update_progress(self, value: int):
-        self.progress_bar.setValue(value)
-        
-    def set_status(self, text: str):
-        self.status_label.setText(text)
-
-class GithubAutoUpdater:
-    """Main GitHub-based auto-update controller"""
-    def __init__(self, app_version: str, repo_owner: str, repo_name: str):
-        self.app_version = app_version
-        self.repo_owner = repo_owner
-        self.repo_name = repo_name
-        self.temp_dir = tempfile.mkdtemp()
-        self.backup_dir = os.path.join(os.path.expanduser("~"), ".gadmanager", "backups")
-        os.makedirs(self.backup_dir, exist_ok=True)
-        
-    def check_and_update(self, parent=None) -> bool:
-        """Checks for updates and performs update if available"""
-        checker = GithubUpdateChecker(self.app_version, self.repo_owner, self.repo_name)
-        release_info = checker.check_for_updates()
-        
-        if not release_info:
-            return False
-            
-        # Add prerelease warning if applicable
-        prerelease_warning = "\n\nNOTE: This is a pre-release version!" if release_info.is_prerelease else ""
-            
-        response = QMessageBox.question(
-            parent,
-            "Update Available",
-            f"Version {release_info.version} is available.\n\n"
-            f"Release Date: {release_info.release_date}\n\n"
-            f"Changelog:\n{release_info.changelog}\n"
-            f"{prerelease_warning}\n\n"
-            "Would you like to update now?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        
-        if response == QMessageBox.Yes:
-            return self._perform_update(release_info, parent)
-            
-        return False
-    
-    def _perform_update(self, release_info: GithubReleaseInfo, parent) -> bool:
-        """Performs the actual update process"""
-        dialog = UpdateDialog(parent)
-        
-        # Download update
-        temp_file = os.path.join(self.temp_dir, "update.zip")
-        downloader = UpdateDownloader(release_info.download_url, temp_file)
-        
-        downloader.progress.connect(dialog.update_progress)
-        downloader.finished.connect(lambda success, error: self._handle_download_finished(
-            success, error, dialog, temp_file
-        ))
-        
-        downloader.start()
-        result = dialog.exec_()
-        
-        if result == QDialog.Rejected:
-            downloader.terminate()
-            return False
-            
-        return True
-    
-    def _handle_download_finished(self, success: bool, error: str, 
-                                dialog: UpdateDialog, temp_file: str):
-        """Handles download completion"""
-        if not success:
-            QMessageBox.critical(dialog, "Error", f"Download failed: {error}")
-            dialog.reject()
-            return
-            
-        dialog.set_status("Installing update...")
-        
-        installer = UpdateInstaller(self.temp_dir, self.backup_dir)
-        
-        if installer.install_update(temp_file):
-            QMessageBox.information(
-                dialog,
-                "Update Complete",
-                "The update has been installed successfully.\n"
-                "Please restart the application to apply the changes."
-            )
-            dialog.accept()
-        else:
-            QMessageBox.critical(
-                dialog,
-                "Update Failed",
-                "Failed to install the update.\n"
-                "The previous version has been restored."
-            )
-            dialog.reject()
-
-
-class GadStatus(Enum):
-    PAIR = "PAIR"       # Sinchronizuota pora
-    PSUS = "PSUS"      # Sustabdyta nuo pirminės pusės
-    SSUS = "SSUS"      # Sustabdyta nuo antrinės pusės
-    SSWS = "SSWS"      # Sustabdyta, antrinė pusė priima įrašymus
-    PSUE = "PSUE"      # Sustabdyta dėl klaidos
-    COPY = "COPY"      # Vyksta kopijavimas
-
-class CopyProgress:
-    """Klasė kopijavimo progreso valdymui"""
-    def __init__(self):
-        self.progress = {}
-
-    def update_progress(self, pair_id: str, progress: int):
-        """Atnaujina kopijavimo progresą konkrečiai porai"""
-        self.progress[pair_id] = {
-            'progress': progress,
-            'time': datetime.now()
-        }
-
-    def get_estimated_end_time(self, pair_id: str) -> Optional[datetime]:
-        """Apskaičiuoja numatomą kopijavimo pabaigos laiką"""
-        if pair_id not in self.progress:
-            return None
-
-        current = self.progress[pair_id]
-        if len(self.progress) < 2:
-            return None
-
-        rate = current['progress'] / (datetime.now() - current['time']).seconds
-        remaining_progress = 100 - current['progress']
-
-        if rate > 0:
-            remaining_time = remaining_progress / rate
-            return datetime.now() + timedelta(seconds=remaining_time)
-        return None
-
-    def get_copy_status(self, pair_id: str) -> dict:
-        """Gauna detalią kopijavimo būsenos informaciją"""
-        if pair_id not in self.progress:
-            return {
-                'status': 'UNKNOWN',
-                'progress': 0,
-                'estimated_end_time': None
-            }
-
-        progress = self.progress[pair_id]['progress']
-        return {
-            'status': 'COPYING' if progress < 100 else 'COMPLETED',
-            'progress': progress,
-            'estimated_end_time': self.get_estimated_end_time(pair_id)
-        }
-
 @dataclass
 class StorageSystem:
     """Saugyklos sistemos informacija"""
@@ -355,6 +46,14 @@ class GADPair:
     name: str
     left_storage: StorageSystem
     right_storage: StorageSystem
+
+class GadStatus(Enum):
+    PAIR = "PAIR"      # Sinchronizuota pora
+    PSUS = "PSUS"      # Sustabdyta nuo pirminės pusės
+    SSUS = "SSUS"      # Sustabdyta nuo antrinės pusės
+    SSWS = "SSWS"      # Sustabdyta, antrinė pusė priima įrašymus
+    PSUE = "PSUE"      # Sustabdyta dėl klaidos
+    COPY = "COPY"      # Vyksta kopijavimas
 
 class ProStyle:
     """Aplikacijos stiliaus apibrėžimai"""
@@ -427,6 +126,363 @@ class ProStyle:
         'L/L': '#0052cc',
         'B/B': '#de350b'
     }
+class UpdateController:
+    """Atnaujinimų valdymo kontroleris"""
+    def __init__(self, parent_window):
+        self.parent_window = parent_window
+        self.app_version = APP_VERSION
+        self.init_auto_updater()
+        
+    def init_auto_updater(self):
+        """Inicializuoja auto-updater"""
+        self.auto_updater = GithubAutoUpdater(
+            self.app_version,
+            "aurimaslt",
+            "GADmanager"
+        )
+    
+    def check_for_updates(self) -> bool:
+        """Patikrina ar yra atnaujinimų"""
+        return self.auto_updater.check_and_update(self.parent_window)
+
+class GithubUpdateChecker:
+    """Checks for available updates using GitHub API"""
+    def __init__(self, current_version: str, repo_owner: str, repo_name: str):
+        self.current_version = current_version
+        self.api_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/releases"
+        
+    def _parse_version(self, version: str) -> tuple:
+        """Converts version string to comparable tuple"""
+        version = version.split(' ')[0]
+        return tuple(map(int, version.split('.')))
+    
+    def check_for_updates(self) -> Optional[GithubReleaseInfo]:
+        """Checks if a new version is available on GitHub"""
+        try:
+            headers = {'Accept': 'application/vnd.github.v3+json'}
+            response = requests.get(self.api_url, headers=headers, timeout=5)
+            response.raise_for_status()
+            
+            releases = response.json()
+            if not releases:
+                return None
+                
+            latest_release = releases[0]
+            latest_version = latest_release['tag_name'].lstrip('v')
+            
+            if self._parse_version(latest_version) > self._parse_version(self.current_version):
+                zip_asset = next(
+                    (asset for asset in latest_release['assets'] 
+                     if asset['name'].endswith('.zip')),
+                    None
+                )
+                
+                if not zip_asset:
+                    return None
+                    
+                return GithubReleaseInfo(
+                    version=latest_version,
+                    release_date=latest_release['published_at'].split('T')[0],
+                    download_url=zip_asset['browser_download_url'],
+                    changelog=latest_release['body'],
+                    is_prerelease=latest_release['prerelease']
+                )
+            return None
+            
+        except Exception as e:
+            print(f"Error checking for updates: {e}")
+            return None
+
+class UpdateDownloader(QThread):
+    """Downloads updates in a separate thread"""
+    progress = pyqtSignal(int)
+    finished = pyqtSignal(bool, str)
+    
+    def __init__(self, url: str, save_path: str):
+        super().__init__()
+        self.url = url
+        self.save_path = save_path
+        
+    def run(self):
+        try:
+            response = requests.get(self.url, stream=True)
+            response.raise_for_status()
+            
+            total_size = int(response.headers.get('content-length', 0))
+            block_size = 1024
+            downloaded = 0
+            
+            with open(self.save_path, 'wb') as f:
+                for data in response.iter_content(block_size):
+                    downloaded += len(data)
+                    f.write(data)
+                    if total_size:
+                        progress = int((downloaded / total_size) * 100)
+                        self.progress.emit(progress)
+                        
+            self.finished.emit(True, "")
+            
+        except Exception as e:
+            self.finished.emit(False, str(e))
+
+class UpdateDialog(QDialog):
+    """Update progress dialog"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Software Update")
+        self.setModal(True)
+        self.setup_ui()
+        
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        
+        self.status_label = QLabel("Downloading update...")
+        layout.addWidget(self.status_label)
+        
+        self.progress_bar = QProgressBar()
+        layout.addWidget(self.progress_bar)
+        
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(self.reject)
+        layout.addWidget(self.cancel_button)
+        
+    def update_progress(self, value: int):
+        self.progress_bar.setValue(value)
+        
+    def set_status(self, text: str):
+        self.status_label.setText(text)
+        
+class GithubAutoUpdater:
+    """Main GitHub-based auto-update controller"""
+    def __init__(self, app_version: str, repo_owner: str, repo_name: str):
+        self.app_version = app_version
+        self.repo_owner = repo_owner
+        self.repo_name = repo_name
+        self.temp_dir = tempfile.mkdtemp()
+        self.backup_dir = os.path.join(os.path.expanduser("~"), ".gadmanager", "backups")
+        os.makedirs(self.backup_dir, exist_ok=True)
+        
+    def check_and_update(self, parent=None) -> bool:
+        """Checks for updates and performs update if available"""
+        checker = GithubUpdateChecker(self.app_version, self.repo_owner, self.repo_name)
+        release_info = checker.check_for_updates()
+        
+        if not release_info:
+            return False
+            
+        prerelease_warning = "\n\nNOTE: This is a pre-release version!" if release_info.is_prerelease else ""
+            
+        response = QMessageBox.question(
+            parent,
+            "Update Available",
+            f"Version {release_info.version} is available.\n\n"
+            f"Release Date: {release_info.release_date}\n\n"
+            f"Changelog:\n{release_info.changelog}\n"
+            f"{prerelease_warning}\n\n"
+            "Would you like to update now?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        
+        if response == QMessageBox.Yes:
+            return self._perform_update(release_info, parent)
+            
+        return False
+    
+    def _perform_update(self, release_info: GithubReleaseInfo, parent) -> bool:
+        """Performs the actual update process"""
+        dialog = UpdateDialog(parent)
+        
+        # Download update
+        temp_file = os.path.join(self.temp_dir, "update.zip")
+        downloader = UpdateDownloader(release_info.download_url, temp_file)
+        
+        downloader.progress.connect(dialog.update_progress)
+        downloader.finished.connect(lambda success, error: self._handle_download_finished(
+            success, error, dialog, temp_file
+        ))
+        
+        downloader.start()
+        result = dialog.exec_()
+        
+        if result == QDialog.Rejected:
+            downloader.terminate()
+            return False
+            
+        return True
+    
+    def _handle_download_finished(self, success: bool, error: str, 
+                                dialog: UpdateDialog, temp_file: str):
+        """Handles download completion"""
+        if not success:
+            QMessageBox.critical(dialog, "Error", f"Download failed: {error}")
+            dialog.reject()
+            return
+            
+        dialog.set_status("Installing update...")
+        
+        installer = UpdateInstaller(self.temp_dir, self.backup_dir)
+        
+        if installer.install_update(temp_file):
+            QMessageBox.information(
+                dialog,
+                "Update Complete",
+                "The update has been installed successfully.\n"
+                "Please restart the application to apply the changes."
+            )
+            dialog.accept()
+        else:
+            QMessageBox.critical(
+                dialog,
+                "Update Failed",
+                "Failed to install the update.\n"
+                "The previous version has been restored."
+            )
+            dialog.reject()
+
+class UpdateInstaller:
+    """Handles the update installation process"""
+    def __init__(self, temp_dir: str, backup_dir: str):
+        self.temp_dir = temp_dir
+        self.backup_dir = backup_dir
+        
+    def backup_current_version(self):
+        """Creates backup of current version"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = os.path.join(self.backup_dir, f"backup_{timestamp}")
+        os.makedirs(backup_path, exist_ok=True)
+        
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        for file in os.listdir(current_dir):
+            if file.endswith(('.py', '.svg', '.exe')):
+                src_path = os.path.join(current_dir, file)
+                dst_path = os.path.join(backup_path, file)
+                if os.path.isfile(src_path):
+                    with open(src_path, 'rb') as src, open(dst_path, 'wb') as dst:
+                        dst.write(src.read())
+                        
+        return backup_path
+    
+    def install_update(self, update_file: str) -> bool:
+        """Installs the update"""
+        try:
+            backup_path = self.backup_current_version()
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            
+            import zipfile
+            with zipfile.ZipFile(update_file, 'r') as zip_ref:
+                zip_ref.extractall(self.temp_dir)
+                
+                for file in os.listdir(self.temp_dir):
+                    src_path = os.path.join(self.temp_dir, file)
+                    dst_path = os.path.join(current_dir, file)
+                    if os.path.isfile(src_path):
+                        with open(src_path, 'rb') as src, open(dst_path, 'wb') as dst:
+                            dst.write(src.read())
+            
+            return True
+            
+        except Exception as e:
+            print(f"Error installing update: {e}")
+            self.rollback(backup_path)
+            return False
+    
+    def rollback(self, backup_path: str):
+        """Rolls back to backup if update fails"""
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        for file in os.listdir(backup_path):
+            src_path = os.path.join(backup_path, file)
+            dst_path = os.path.join(current_dir, file)
+            if os.path.isfile(src_path):
+                with open(src_path, 'rb') as src, open(dst_path, 'wb') as dst:
+                    dst.write(src.read())
+
+class GADController:
+    """GAD porų valdymo kontroleris"""
+    def __init__(self):
+        self.pairs = []
+        self.copy_controller = CopyProgress()
+
+    def update_pairs(self, new_pairs: List[GADPair]):
+        """Atnaujina porų informaciją"""
+        self.pairs = new_pairs
+        
+    def get_command_for_operation(self, pair: GADPair, operation: str) -> str:
+        """Generuoja komandą pagal operacijos tipą"""
+        commands = {
+            "split_vsp1": f"pairsplit -g {pair.group} {pair.left_storage.instance}",
+            "split_vsp2": f"pairsplit -g {pair.group} -RS {pair.right_storage.instance}",
+            "swap_p": f"pairresync -g {pair.group} -swaps {pair.right_storage.instance}",
+            "swap_s": f"pairresync -g {pair.group} -swaps {pair.left_storage.instance}",
+            "resync": self.get_resync_command(pair)
+        }
+        return commands.get(operation, "Unknown command")
+
+    def get_resync_command(self, pair: GADPair) -> str:
+        """Generuoja resync komandą"""
+        if (pair.right_storage.role == 'S-VOL' and
+            pair.right_storage.status == 'SSWS' and
+            pair.left_storage.role == 'P-VOL' and
+            pair.left_storage.status == 'PSUS'):
+            return (f"pairresync -g {pair.group} -swaps -IH20\n"
+                   f"pairresync -g {pair.group} -swaps -IH10")
+        elif (pair.left_storage.role == 'S-VOL' and
+              pair.left_storage.status == 'SSWS' and
+              pair.right_storage.role == 'P-VOL' and
+              pair.right_storage.status == 'PSUS'):
+            return (f"pairresync -g {pair.group} -swaps -IH10\n"
+                   f"pairresync -g {pair.group} -IH10")
+        elif (pair.left_storage.role == 'P-VOL' and
+              pair.left_storage.status == 'PSUS' and
+              pair.right_storage.role == 'S-VOL' and
+              pair.right_storage.status == 'SSUS'):
+            return f"pairresync -g {pair.group} -IH10"
+        else:
+            return "# Cannot perform resync - invalid pair state"
+
+class CopyProgress:
+    """Klasė kopijavimo progreso valdymui"""
+    def __init__(self):
+        self.progress = {}
+
+    def update_progress(self, pair_id: str, progress: int):
+        """Atnaujina kopijavimo progresą konkrečiai porai"""
+        self.progress[pair_id] = {
+            'progress': progress,
+            'time': datetime.now()
+        }
+
+    def get_estimated_end_time(self, pair_id: str) -> Optional[datetime]:
+        """Apskaičiuoja numatomą kopijavimo pabaigos laiką"""
+        if pair_id not in self.progress:
+            return None
+
+        current = self.progress[pair_id]
+        if len(self.progress) < 2:
+            return None
+
+        rate = current['progress'] / (datetime.now() - current['time']).seconds
+        remaining_progress = 100 - current['progress']
+
+        if rate > 0:
+            remaining_time = remaining_progress / rate
+            return datetime.now() + timedelta(seconds=remaining_time)
+        return None
+
+    def get_copy_status(self, pair_id: str) -> dict:
+        """Gauna detalią kopijavimo būsenos informaciją"""
+        if pair_id not in self.progress:
+            return {
+                'status': 'UNKNOWN',
+                'progress': 0,
+                'estimated_end_time': None
+            }
+
+        progress = self.progress[pair_id]['progress']
+        return {
+            'status': 'COPYING' if progress < 100 else 'COMPLETED',
+            'progress': progress,
+            'estimated_end_time': self.get_estimated_end_time(pair_id)
+        }
 
 class StorageView(QFrame):
     """Saugyklos informacijos atvaizdavimo komponentas"""
@@ -573,7 +629,6 @@ class GadPairPanel(QFrame):
 
         layout.addLayout(self.button_layout)
 
-        # Initial button state update
         if self.pair:
             self.update_button_states()
 
@@ -588,6 +643,7 @@ class GadPairPanel(QFrame):
     def update_button_states(self):
         if not self.pair:
             return
+
         # Reset buttons
         for btn in self.buttons.values():
             btn.setEnabled(False)
@@ -606,43 +662,6 @@ class GadPairPanel(QFrame):
                     border-color: #9da5b4;
                 }
             """)
-        # PAIR status
-        if (self.pair.left_storage.status == 'PAIR' and
-            self.pair.right_storage.status == 'PAIR'):
-            self.buttons["split_vsp1"].setEnabled(True)
-            self.buttons["split_vsp2"].setEnabled(True)
-            self._set_active_button_style(self.buttons["split_vsp1"])
-            self._set_active_button_style(self.buttons["split_vsp2"])
-
-            if self.pair.left_storage.role == 'P-VOL':
-                self.buttons["swap_p"].setEnabled(True)
-                self._set_active_button_style(self.buttons["swap_p"])
-            else:
-                self.buttons["swap_s"].setEnabled(True)
-                self._set_active_button_style(self.buttons["swap_s"])
-
-        # Resync conditions
-        can_resync = (
-            (self.pair.left_storage.role == 'P-VOL' and
-             self.pair.left_storage.status == 'PSUS' and
-             self.pair.right_storage.role == 'S-VOL' and
-             self.pair.right_storage.status == 'SSUS') or
-            (self.pair.right_storage.role == 'P-VOL' and
-             self.pair.right_storage.status == 'SSWS' and
-             self.pair.right_storage.rw_status == 'L/L' and
-             self.pair.left_storage.role == 'S-VOL' and
-             self.pair.left_storage.status == 'PSUS' and
-             self.pair.left_storage.rw_status == 'B/B') or
-            (self.pair.left_storage.role == 'P-VOL' and
-             self.pair.left_storage.status == 'SSWS' and
-             self.pair.left_storage.rw_status == 'L/L' and
-             self.pair.right_storage.role == 'S-VOL' and
-             self.pair.right_storage.status == 'PSUS' and
-             self.pair.right_storage.rw_status == 'B/B')
-        )
-        if can_resync:
-            self.buttons["resync"].setEnabled(True)
-            self._set_active_button_style(self.buttons["resync"])
 
         # Check pair synchronization state
         is_synchronized = (
@@ -716,457 +735,74 @@ class GadPairPanel(QFrame):
             }
         """)
 
-class HORCMConfigFrame(QFrame):
-    """HORCM konfigūracijos generavimo komponentas"""
-    def __init__(self, parent=None):
+class OutputParserFrame(QWidget):
+    """Output parser widget"""
+    def __init__(self, parent=None, callback=None):
         super().__init__(parent)
+        self.callback = callback
+        self.cmd_output = None
         self.init_ui()
+        self.debug = True
 
     def init_ui(self):
-        main_layout = QHBoxLayout(self)
-        main_layout.setSpacing(16)
-
-        # Kairė kolona - Visi parametrai
-        left_column = QVBoxLayout()
-
-        # Server Parameters
-        server_group = QGroupBox("HORCM Server Parameters")
-        server_layout = QFormLayout()
-        server_layout.setSpacing(8)
-
-        self.ip_entry = QLineEdit("127.0.0.1")
-        server_layout.addRow("HORCM Server IP:", self.ip_entry)
-
-        info_label = QLabel("(This IP will be used for HORCM service)")
-        info_label.setStyleSheet("color: #666; font-style: italic;")
-        server_layout.addRow("", info_label)
-
-        server_group.setLayout(server_layout)
-        left_column.addWidget(server_group)
-
-        # VSP Parameters Groups
-        for vsp_num in [1, 2]:
-            vsp_group = QGroupBox(f"VSP{vsp_num} Parameters")
-            vsp_layout = QFormLayout()
-            vsp_layout.setSpacing(8)
-
-            serial_entry = QLineEdit(f"8{vsp_num*11111}")
-            ip_entry = QLineEdit(f"{vsp_num}.{vsp_num}.{vsp_num}.{vsp_num}")
-            setattr(self, f"vsp{vsp_num}_serial", serial_entry)
-            setattr(self, f"vsp{vsp_num}_ip", ip_entry)
-
-            vsp_layout.addRow("Serial Number:", serial_entry)
-            vsp_layout.addRow("IP Address:", ip_entry)
-
-            vsp_group.setLayout(vsp_layout)
-            left_column.addWidget(vsp_group)
-
-        # Buttons
-        buttons_group = QGroupBox("Actions")
-        buttons_layout = QHBoxLayout()
-        buttons_layout.setSpacing(8)
-
-        preview_btn = QPushButton("Generate Preview")
-        preview_btn.setProperty("class", "primary")
-        preview_btn.clicked.connect(self.update_preview)
-        buttons_layout.addWidget(preview_btn)
-
-        save_btn = QPushButton("Save Files")
-        save_btn.clicked.connect(self.save_files)
-        buttons_layout.addWidget(save_btn)
-
-        buttons_group.setLayout(buttons_layout)
-        left_column.addWidget(buttons_group)
-
-        left_column.addStretch()
-        main_layout.addLayout(left_column)
-
-        # Vidurinė kolona - LUN konfigūracija (padidinta)
-        middle_column = QVBoxLayout()
-
-        # LUN Configuration
-        lun_group = QGroupBox("LUN Configuration")
-        self.lun_layout = QVBoxLayout()
-        self.lun_layout.setSpacing(8)
-
-        # Add LUN button and container header
-        header_layout = QHBoxLayout()
-
-        header_label = QLabel("Configured LUNs")
-        header_label.setStyleSheet("font-weight: bold;")
-        header_layout.addWidget(header_label)
-
-        add_btn = QPushButton("➕ Add LUN")
-        add_btn.setMaximumWidth(100)
-        add_btn.clicked.connect(self.add_lun)
-        header_layout.addWidget(add_btn, alignment=Qt.AlignRight)
-
-        self.lun_layout.addLayout(header_layout)
-
-        # Scroll area for LUN entries
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setMinimumHeight(300)
-
-        scroll_widget = QWidget()
-        self.lun_container = QVBoxLayout(scroll_widget)
-        self.lun_container.setSpacing(8)
-        self.lun_container.addStretch()
-        scroll.setWidget(scroll_widget)
-
-        self.lun_layout.addWidget(scroll)
-        lun_group.setLayout(self.lun_layout)
-        middle_column.addWidget(lun_group)
-        middle_column.addStretch()
-
-        main_layout.addLayout(middle_column)
-
-        # Dešinė kolona - Preview (sumažinta)
-        right_column = QVBoxLayout()
-
-        # Preview
-        preview_group = QGroupBox("Configuration Preview")
-        preview_layout = QVBoxLayout()
-        preview_layout.setSpacing(8)
-
-        self.preview_text = QTextEdit()
-        self.preview_text.setReadOnly(True)
-        self.preview_text.setFont(QFont("Consolas", 9))
-        self.preview_text.setMinimumWidth(300)
-        preview_layout.addWidget(self.preview_text)
-
-        preview_group.setLayout(preview_layout)
-        right_column.addWidget(preview_group)
-
-        main_layout.addLayout(right_column)
-
-        # Set column stretch factors
-        main_layout.setStretch(0, 2)
-        main_layout.setStretch(1, 3)
-        main_layout.setStretch(2, 2)
-
-        # Add initial LUN
-        self.add_lun()
-
-    def add_lun(self):
-        """Prideda naują LUN įvesties eilutę"""
-        lun_frame = QFrame()
-        lun_frame.setStyleSheet("QFrame { background: #f7f9fc; border-radius: 4px; padding: 8px; }")
-        lun_layout = QHBoxLayout()
-        lun_layout.setSpacing(8)
-        lun_layout.setContentsMargins(8, 8, 8, 8)
-
-        fields = {
-            "group": QLineEdit("HDID"),
-            "name": QLineEdit("GAD_TEST"),
-            "ldev": QLineEdit("52735")
-        }
-
-        # Compact grid layout for fields
-        fields_layout = QGridLayout()
-        fields_layout.setSpacing(4)
-        fields_layout.setContentsMargins(0, 0, 0, 0)
-
-        # Add fields in a more compact way
-        for col, (key, value) in enumerate(fields.items()):
-            fields_layout.addWidget(QLabel(f"{key.title()}:"), 0, col*2)
-            fields_layout.addWidget(value, 0, col*2+1)
-            if key == "group":
-                value.setFixedWidth(60)
-            elif key == "name":
-                value.setFixedWidth(100)
-            elif key == "ldev":
-                value.setFixedWidth(60)
-
-        lun_layout.addLayout(fields_layout)
-
-        # Remove button
-        remove_btn = QPushButton("×")
-        remove_btn.setFixedSize(20, 20)
-        remove_btn.setStyleSheet("""
-            QPushButton {
-                background: #f0f0f0;
-                border: none;
-                border-radius: 10px;
-                color: #666;
-                font-weight: bold;
-                padding: 0;
-                margin: 0;
-            }
-            QPushButton:hover {
-                background: #e0e0e0;
-                color: #333;
-            }
-        """)
-        remove_btn.clicked.connect(lambda: self.remove_lun(lun_frame))
-        lun_layout.addWidget(remove_btn)
-
-        lun_frame.setLayout(lun_layout)
-        lun_frame.fields = fields
-
-        self.lun_container.insertWidget(self.lun_container.count() - 1, lun_frame)
-
-    def remove_lun(self, lun_frame):
-        """Pašalina LUN įvesties eilutę"""
-        if self.lun_container.count() > 1:
-            lun_frame.deleteLater()
-        else:
-            QMessageBox.warning(self, "Warning", "Cannot remove the last LUN!")
-
-    def get_lun_values(self):
-        """Surenka visų LUN įvesčių reikšmes"""
-        values = []
-        for i in range(self.lun_container.count()):
-            widget = self.lun_container.itemAt(i).widget()
-            if widget and isinstance(widget, QFrame):
-                values.append({
-                    "group": widget.fields["group"].text(),
-                    "name": widget.fields["name"].text(),
-                    "ldev": widget.fields["ldev"].text()
-                })
-        return values
-
-    def update_preview(self):
-        """Atnaujina konfigūracijos peržiūrą"""
-        try:
-            preview = "=== HORCM10.conf ===\n"
-            preview += self.generate_horcm10()
-            preview += "\n\n=== HORCM20.conf ===\n"
-            preview += self.generate_horcm20()
-
-            self.preview_text.setFontFamily("Courier New")
-            self.preview_text.setText(preview)
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to generate configuration: {str(e)}")
-
-    def validate_inputs(self) -> bool:
-        """Patikrina įvesties laukų teisingumą"""
-        # Tikriname IP adresus
-        ip_pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
-
-        if not re.match(ip_pattern, self.ip_entry.text()):
-            QMessageBox.warning(self, "Validation Error", "Invalid HORCM server IP address format")
-            return False
-
-        if not re.match(ip_pattern, self.vsp1_ip.text()):
-            QMessageBox.warning(self, "Validation Error", "Invalid VSP1 IP address format")
-            return False
-
-        if not re.match(ip_pattern, self.vsp2_ip.text()):
-            QMessageBox.warning(self, "Validation Error", "Invalid VSP2 IP address format")
-            return False
-
-        # Tikriname serijos numerius
-        if not self.vsp1_serial.text().isdigit() or len(self.vsp1_serial.text()) != 6:
-            QMessageBox.warning(self, "Validation Error", "VSP1 serial number must be 6 digits")
-            return False
-
-        if not self.vsp2_serial.text().isdigit() or len(self.vsp2_serial.text()) != 6:
-            QMessageBox.warning(self, "Validation Error", "VSP2 serial number must be 6 digits")
-            return False
-
-        # Tikriname LUN konfigūracijas
-        luns = self.get_lun_values()
-        if not luns:
-            QMessageBox.warning(self, "Validation Error", "At least one LUN configuration is required")
-            return False
-
-        for lun in luns:
-            if not lun["group"]:
-                QMessageBox.warning(self, "Validation Error", "Group ID cannot be empty")
-                return False
-
-            if not lun["name"]:
-                QMessageBox.warning(self, "Validation Error", "Device name cannot be empty")
-                return False
-
-            if not lun["ldev"].isdigit():
-                QMessageBox.warning(self, "Validation Error", "LDEV number must be numeric")
-                return False
-
-        return True
-
-    def save_files(self):
-        """Išsaugo sugeneruotus failus"""
-        if not self.validate_inputs():
-            return
-
-        try:
-            # Leidžia vartotojui pasirinkti katalogą
-            save_dir = QFileDialog.getExistingDirectory(
-                self,
-                "Select Directory to Save Configuration Files",
-                "",
-                QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks
-            )
-
-            if save_dir:
-                # Išsaugome abu failus
-                with open(f"{save_dir}/horcm10.conf", 'w') as f:
-                    f.write(self.generate_horcm10())
-
-                with open(f"{save_dir}/horcm20.conf", 'w') as f:
-                    f.write(self.generate_horcm20())
-
-                QMessageBox.information(
-                    self,
-                    "Success",
-                    f"Configuration files saved successfully to:\n{save_dir}"
-                )
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Error",
-                f"Failed to save configuration files:\n{str(e)}"
-            )
-
-    def generate_horcm10(self):
-        """Generuoja HORCM10.conf turinį"""
-        luns = self.get_lun_values()
-        if not luns:
-            return ""
-
-        # LDEV sekcija
-        ldev_lines = []
-        for lun in luns:
-            ldev_lines.append(f"{lun['group']}    {lun['name']}    "
-                              f"{self.vsp1_serial.text()}    {lun['ldev']}    0")
-
-        # INST sekcija
-        unique_groups = {lun["group"] for lun in luns}
-        inst_lines = []
-        for group in sorted(unique_groups):
-            inst_lines.append(f"{group}    {self.ip_entry.text()}    5020")
-
-        return f"""HORCM_MON
-# ip_address service poll(10ms) timeout(10ms)
-{self.ip_entry.text()}    5010    1000       3000
-
-HORCM_CMD
-# VSP1 (Serial No.: {self.vsp1_serial.text()})
-\\\\.\\CMD-{self.vsp1_serial.text()}-{luns[0]['ldev']}
-
-HORCM_LDEV
-# DeviceGroup, DeviceName, Serial#, CU:LDEV(LDEV#), MU#
-{chr(10).join(ldev_lines)}
-
-HORCM_INST
-# DeviceGroup         ip_address      service
-{chr(10).join(inst_lines)}"""
-
-    def generate_horcm20(self):
-        """Generuoja HORCM20.conf turinį"""
-        luns = self.get_lun_values()
-        if not luns:
-            return ""
-
-        # LDEV sekcija
-        ldev_lines = []
-        for lun in luns:
-            ldev_lines.append(f"{lun['group']}    {lun['name']}    "
-                              f"{self.vsp2_serial.text()}    {lun['ldev']}    0")
-
-        # INST sekcija
-        unique_groups = {lun["group"] for lun in luns}
-        inst_lines = []
-        for group in sorted(unique_groups):
-            inst_lines.append(f"{group}    {self.ip_entry.text()}    5010")
-
-        return f"""HORCM_MON
-# ip_address service poll(10ms) timeout(10ms)
-{self.ip_entry.text()}    5020    1000       3000
-
-HORCM_CMD
-# VSP2 (Serial No.: {self.vsp2_serial.text()})
-\\\\.\\CMD-{self.vsp2_serial.text()}-{luns[0]['ldev']}
-
-HORCM_LDEV
-# DeviceGroup, DeviceName, Serial#, CU:LDEV(LDEV#), MU#
-{chr(10).join(ldev_lines)}
-
-HORCM_INST
-# DeviceGroup         ip_address      service
-{chr(10).join(inst_lines)}"""
-
-    def keyPressEvent(self, event):
-        """Apdoroja klavišų paspaudimus"""
-        # Ctrl+S - išsaugoti
-        if event.modifiers() & Qt.ControlModifier and event.key() == Qt.Key_S:
-            self.save_files()
-        # Ctrl+P - peržiūra
-        elif event.modifiers() & Qt.ControlModifier and event.key() == Qt.Key_P:
-            self.update_preview()
-        else:
-            super().keyPressEvent(event)
-
-class OutputParserFrame(QWidget):
-   def __init__(self, parent=None, callback=None):
-      super().__init__(parent)
-      self.callback = callback
-      self.cmd_output = None
-      self.init_ui()
-      self.debug = True
-
-   def init_ui(self):
-      layout = QVBoxLayout(self)
-      layout.setSpacing(2)
-      layout.setContentsMargins(0, 0, 0, 0)
-
-      self.input_field = QTextEdit()
-      self.input_field.setPlaceholderText("To get the required output:\n"
+        layout = QVBoxLayout(self)
+        layout.setSpacing(2)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.input_field = QTextEdit()
+        self.input_field.setPlaceholderText("To get the required output:\n"
                                      "1. SSH into your server\n"
                                      "2. Run command (click button to copy):\n"
                                      "3. Replace GROUP with your GAD group name\n"
                                      "4. Paste pairdisplay output here...")
-      self.input_field.setMaximumHeight(80)
-      layout.addWidget(self.input_field)
+        self.input_field.setMaximumHeight(80)
+        layout.addWidget(self.input_field)
 
-      button_layout = QHBoxLayout()
-      button_layout.addStretch(1)
-      
-      # Komanda ir Copy mygtukas
-      cmd_label = QLabel("pairdisplay -g GROUP -CLI -IH10")
-      cmd_label.setStyleSheet("font-family: monospace; padding: 4px; color: #0052cc;")
-      button_layout.addWidget(cmd_label)
-      
-      copy_btn = QPushButton("📋 Copy Pairdisplay")
-      copy_btn.setFixedWidth(150)
-      copy_btn.clicked.connect(lambda: self.copy_command())
-      button_layout.addWidget(copy_btn)
-      
-      button_layout.addSpacing(10)  # Tarpas tarp mygtukų grupių
-      
-      # Kiti mygtukai
-      help_btn = QPushButton("❓ Show Example")
-      help_btn.clicked.connect(self.show_example)
-      button_layout.addWidget(help_btn)
+        button_layout = QHBoxLayout()
+        button_layout.addStretch(1)
+        
+        # Komanda ir Copy mygtukas
+        cmd_label = QLabel("pairdisplay -g GROUP -CLI -IH10")
+        cmd_label.setStyleSheet("font-family: monospace; padding: 4px; color: #0052cc;")
+        button_layout.addWidget(cmd_label)
+        
+        copy_btn = QPushButton("📋 Copy Pairdisplay")
+        copy_btn.setFixedWidth(150)
+        copy_btn.clicked.connect(lambda: self.copy_command())
+        button_layout.addWidget(copy_btn)
+        
+        button_layout.addSpacing(10)
+        
+        # Kiti mygtukai
+        help_btn = QPushButton("❓ Show Example")
+        help_btn.clicked.connect(self.show_example)
+        button_layout.addWidget(help_btn)
 
-      parse_btn = QPushButton("📝 Parse Input")
-      parse_btn.clicked.connect(lambda: self.parse_output(self.input_field.toPlainText()))
-      button_layout.addWidget(parse_btn)
+        parse_btn = QPushButton("📝 Parse Input")
+        parse_btn.clicked.connect(lambda: self.parse_output(self.input_field.toPlainText()))
+        button_layout.addWidget(parse_btn)
 
-      paste_btn = QPushButton("📋 Parse from Clipboard")
-      paste_btn.setProperty("class", "primary")
-      paste_btn.clicked.connect(lambda: self.parse_clipboard(True))
-      button_layout.addWidget(paste_btn)
-      
-      button_layout.addStretch(1)
-      layout.addLayout(button_layout)
+        paste_btn = QPushButton("📋 Parse from Clipboard")
+        paste_btn.setProperty("class", "primary")
+        paste_btn.clicked.connect(lambda: self.parse_clipboard(True))
+        button_layout.addWidget(paste_btn)
+        
+        button_layout.addStretch(1)
+        layout.addLayout(button_layout)
 
-   def copy_command(self):
-      QApplication.clipboard().setText("pairdisplay -g GROUP -CLI -IH10")
-      QMessageBox.information(self, "Success", "Command copied to clipboard!")
+    def copy_command(self):
+        QApplication.clipboard().setText("pairdisplay -g GROUP -CLI -IH10")
+        QMessageBox.information(self, "Success", "Command copied to clipboard!")
 
-   def set_command_output(self, cmd_output):
-      self.cmd_output = cmd_output
+    def set_command_output(self, cmd_output):
+        self.cmd_output = cmd_output
 
-   def show_example(self):
-      msg = QMessageBox()
-      msg.setWindowTitle("Example Output")
-      msg.setText("Example of the expected pairdisplay output format:")
-      
-      example = """Group   PairVol(L/R) (Port#,TID, LU),Seq#,LDEV#.P/S,Status,Fence,   %,P-LDEV# M CTG JID AP EM       E-Seq# E-LDEV# R/W QM DM P PR CS D_Status ST ELV PGID           CT(s) LUT
+    def show_example(self):
+        msg = QMessageBox()
+        msg.setWindowTitle("Example Output")
+        msg.setText("Example of the expected pairdisplay output format:")
+        
+        example = """Group   PairVol(L/R) (Port#,TID, LU),Seq#,LDEV#.P/S,Status,Fence,   %,P-LDEV# M CTG JID AP EM       E-Seq# E-LDEV# R/W QM DM P PR CS D_Status ST ELV PGID           CT(s) LUT
 HDID    GAD_TEST_HA(L) (CL8-F-8, 0,   5)445329  6001.P-VOL PSUS NEVER ,  100  6001 -   -   0  4  -            -       - B/B -  D  N D   3 -         - -      -               - -
 HDID    GAD_TEST_HA(R) (CL8-F-12, 0,   5)445317  6001.S-VOL SSWS NEVER ,  100  6001 -   -   0  4  -            -       - L/L -  D  N D   3 -         - -      -               - -
 OR
@@ -1176,113 +812,113 @@ HDID    GAD_TEST_HA(R) (CL8-F-12, 0,   5)445317  6001.S-VOL SSWS NEVER ,  100  6
 HDID2    GAD_TEST_HA2(L) (CL8-F-8, 0,   5)445329  6002.P-VOL PAIR NEVER ,  100  6002 -   -   0  4  -            -       - L/L -  D  N D   3 -         - -      -               - -
 HDID2    GAD_TEST_HA2(R) (CL8-F-12, 0,   5)445317  6002.S-VOL PAIR NEVER ,  100  6002 -   -   0  4  -            -       - L/L -  D  N D   3 -         - -      -               - -"""
       
-      text_edit = QTextEdit()
-      text_edit.setPlainText(example)
-      text_edit.setReadOnly(True)
-      text_edit.setMinimumWidth(850)
-      text_edit.setMinimumHeight(10)
-      
-      layout = msg.layout()
-      layout.addWidget(text_edit, 1, 0, 1, layout.columnCount())
-      msg.exec_()
+        text_edit = QTextEdit()
+        text_edit.setPlainText(example)
+        text_edit.setReadOnly(True)
+        text_edit.setMinimumWidth(850)
+        text_edit.setMinimumHeight(10)
+        
+        layout = msg.layout()
+        layout.addWidget(text_edit, 1, 0, 1, layout.columnCount())
+        msg.exec_()
 
-   def log(self, msg: str):
-      if self.debug:
-         print(f"DEBUG: {msg}")
+    def log(self, msg: str):
+        if self.debug:
+            print(f"DEBUG: {msg}")
 
-   def parse_clipboard(self, clear_input=False):
-      clipboard = QApplication.clipboard()
-      text = clipboard.text().strip()
-      if not text:
-         QMessageBox.warning(self, "Error", "Clipboard is empty")
-         return
-      if clear_input:
-         self.input_field.setText(text)
-      self.parse_output(text)
+    def parse_clipboard(self, clear_input=False):
+        clipboard = QApplication.clipboard()
+        text = clipboard.text().strip()
+        if not text:
+            QMessageBox.warning(self, "Error", "Clipboard is empty")
+            return
+        if clear_input:
+            self.input_field.setText(text)
+        self.parse_output(text)
 
-   def parse_output(self, text: str):
-      if not text:
-         QMessageBox.warning(self, "Error", "Please enter pairdisplay output")
-         return
+    def parse_output(self, text: str):
+        if not text:
+            QMessageBox.warning(self, "Error", "Please enter pairdisplay output")
+            return
 
-      try:
-         self.log(f"Starting text analysis:\n{text}")
-         pairs = self._parse_pairdisplay(text)
-         if self.callback:
-            self.callback(pairs)
-         QMessageBox.information(self, "Success", "Output successfully analyzed")
-      except Exception as e:
-         self.log(f"Error analyzing:\n{str(e)}")
-         QMessageBox.critical(self, "Error", f"Failed to analyze output: {str(e)}")
+        try:
+            self.log(f"Starting text analysis:\n{text}")
+            pairs = self._parse_pairdisplay(text)
+            if self.callback:
+                self.callback(pairs)
+            QMessageBox.information(self, "Success", "Output successfully analyzed")
+        except Exception as e:
+            self.log(f"Error analyzing:\n{str(e)}")
+            QMessageBox.critical(self, "Error", f"Failed to analyze output: {str(e)}")
 
-   def _parse_pairdisplay(self, text: str) -> List[GADPair]:
-      lines = [line.strip() for line in text.split('\n') 
-            if line.strip() and not line.startswith('Group')]
-      
-      pairs = []
-      for i in range(0, len(lines), 2):
-         if i + 1 >= len(lines):
-            break
+    def _parse_pairdisplay(self, text: str) -> List[GADPair]:
+        lines = [line.strip() for line in text.split('\n') 
+              if line.strip() and not line.startswith('Group')]
+        
+        pairs = []
+        for i in range(0, len(lines), 2):
+            if i + 1 >= len(lines):
+                break
+                
+            left_line = lines[i]
+            right_line = lines[i + 1]
             
-         left_line = lines[i]
-         right_line = lines[i + 1]
-         
-         try:
-            match = re.match(r'(\w+)\s+([\w_]+)', left_line)
-            group, name = match.groups()
-            
-            left_serial = re.search(r'(\d{6})', left_line).group(1)
-            right_serial = re.search(r'(\d{6})', right_line).group(1)
-            
-            left_ldev = re.search(r'(\d+)\.(P|S)-VOL', left_line)
-            right_ldev = re.search(r'(\d+)\.(P|S)-VOL', right_line)
-            
-            left_status = next(s for s in left_line.split() if s in ['PAIR', 'PSUS', 'SSUS', 'SSWS', 'PSUE', 'COPY'])
-            right_status = next(s for s in right_line.split() if s in ['PAIR', 'PSUS', 'SSUS', 'SSWS', 'PSUE', 'COPY'])
-            
-            left_rw = re.search(r'([BL]/[BLM])', left_line).group(1)
-            right_rw = re.search(r'([BL]/[BLM])', right_line).group(1)
+            try:
+                match = re.match(r'(\w+)\s+([\w_]+)', left_line)
+                group, name = match.groups()
+                
+                left_serial = re.search(r'(\d{6})', left_line).group(1)
+                right_serial = re.search(r'(\d{6})', right_line).group(1)
+                
+                left_ldev = re.search(r'(\d+)\.(P|S)-VOL', left_line)
+                right_ldev = re.search(r'(\d+)\.(P|S)-VOL', right_line)
+                
+                left_status = next(s for s in left_line.split() if s in ['PAIR', 'PSUS', 'SSUS', 'SSWS', 'PSUE', 'COPY'])
+                right_status = next(s for s in right_line.split() if s in ['PAIR', 'PSUS', 'SSUS', 'SSWS', 'PSUE', 'COPY'])
+                
+                left_rw = re.search(r'([BL]/[BLM])', left_line).group(1)
+                right_rw = re.search(r'([BL]/[BLM])', right_line).group(1)
 
-            left_storage = StorageSystem(
-               serial_number=left_serial,
-               host=self._extract_port_info(left_line) or '',
-               ldev_number=left_ldev.group(1),
-               status=left_status, 
-               role=f"{left_ldev.group(2)}-VOL",
-               rw_status=left_rw,
-               instance='-IH10'
-            )
+                left_storage = StorageSystem(
+                    serial_number=left_serial,
+                    host=self._extract_port_info(left_line) or '',
+                    ldev_number=left_ldev.group(1),
+                    status=left_status, 
+                    role=f"{left_ldev.group(2)}-VOL",
+                    rw_status=left_rw,
+                    instance='-IH10'
+                )
 
-            right_storage = StorageSystem(
-               serial_number=right_serial,
-               host=self._extract_port_info(right_line) or '',
-               ldev_number=right_ldev.group(1),
-               status=right_status,
-               role=f"{right_ldev.group(2)}-VOL",
-               rw_status=right_rw,
-               instance='-IH20'
-            )
+                right_storage = StorageSystem(
+                    serial_number=right_serial,
+                    host=self._extract_port_info(right_line) or '',
+                    ldev_number=right_ldev.group(1),
+                    status=right_status,
+                    role=f"{right_ldev.group(2)}-VOL",
+                    rw_status=right_rw,
+                    instance='-IH20'
+                )
 
-            pairs.append(GADPair(group=group, name=name,
-                     left_storage=left_storage, right_storage=right_storage))
-            
-         except Exception as e:
-            raise ValueError(f"Parsing error: {str(e)}\nLeft: {left_line}\nRight: {right_line}")
+                pairs.append(GADPair(group=group, name=name,
+                         left_storage=left_storage, right_storage=right_storage))
+                
+            except Exception as e:
+                raise ValueError(f"Parsing error: {str(e)}\nLeft: {left_line}\nRight: {right_line}")
 
-      return pairs
+        return pairs
 
-   def _extract_port_info(self, line: str) -> str:
-      start = line.find('(CL')
-      if start == -1:
-         self.log("CL port start mark not found")
-         return None
-      end = line.find(')', start)
-      if end == -1:
-         self.log("Port end mark not found")
-         return None
-      port_info = line[start:end+1]
-      self.log(f"Extracted port info: {port_info}")
-      return port_info
+    def _extract_port_info(self, line: str) -> str:
+        start = line.find('(CL')
+        if start == -1:
+            self.log("CL port start mark not found")
+            return None
+        end = line.find(')', start)
+        if end == -1:
+            self.log("Port end mark not found")
+            return None
+        port_info = line[start:end+1]
+        self.log(f"Extracted port info: {port_info}")
+        return port_info
 
 class CommandOutput(QWidget):
     """Komandų išvesties komponentas"""
@@ -1504,10 +1140,10 @@ class AboutDialog(QDialog):
         layout.addWidget(title)
         
         # Versijos informacija
-        version_info = QLabel("""
+        version_info = QLabel(f"""
             <p style='text-align: center;'>
-            Version 0.19 beta<br>
-            Release Date: 2024-02-15<br>
+            Version {APP_VERSION}<br>
+            Release Date: {APP_RELEASE_DATE}<br>
             </p>
         """)
         version_info.setTextFormat(Qt.RichText)
@@ -1527,7 +1163,7 @@ class AboutDialog(QDialog):
         """)
         description.setTextFormat(Qt.RichText)
         description.setAlignment(Qt.AlignCenter)
-        description.setOpenExternalLinks(True)  # Pridėta ši eilutė
+        description.setOpenExternalLinks(True)
         layout.addWidget(description)
         
         # Kontaktinė informacija
@@ -1551,6 +1187,389 @@ class AboutDialog(QDialog):
         button_box.accepted.connect(self.accept)
         layout.addWidget(button_box)
 
+class HORCMConfigFrame(QFrame):
+    """HORCM konfigūracijos generavimo komponentas"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.init_ui()
+
+    def init_ui(self):
+        main_layout = QHBoxLayout(self)
+        main_layout.setSpacing(16)
+
+        # Kairė kolona - Visi parametrai
+        left_column = QVBoxLayout()
+
+        # Server Parameters
+        server_group = QGroupBox("HORCM Server Parameters")
+        server_layout = QFormLayout()
+        server_layout.setSpacing(8)
+
+        self.ip_entry = QLineEdit("127.0.0.1")
+        server_layout.addRow("HORCM Server IP:", self.ip_entry)
+
+        info_label = QLabel("(This IP will be used for HORCM service)")
+        info_label.setStyleSheet("color: #666; font-style: italic;")
+        server_layout.addRow("", info_label)
+
+        server_group.setLayout(server_layout)
+        left_column.addWidget(server_group)
+
+        # VSP Parameters Groups
+        for vsp_num in [1, 2]:
+            vsp_group = QGroupBox(f"VSP{vsp_num} Parameters")
+            vsp_layout = QFormLayout()
+            vsp_layout.setSpacing(8)
+
+            serial_entry = QLineEdit(f"8{vsp_num*11111}")
+            ip_entry = QLineEdit(f"{vsp_num}.{vsp_num}.{vsp_num}.{vsp_num}")
+            setattr(self, f"vsp{vsp_num}_serial", serial_entry)
+            setattr(self, f"vsp{vsp_num}_ip", ip_entry)
+
+            vsp_layout.addRow("Serial Number:", serial_entry)
+            vsp_layout.addRow("IP Address:", ip_entry)
+
+            vsp_group.setLayout(vsp_layout)
+            left_column.addWidget(vsp_group)
+
+        # Buttons
+        buttons_group = QGroupBox("Actions")
+        buttons_layout = QHBoxLayout()
+        buttons_layout.setSpacing(8)
+
+        preview_btn = QPushButton("Generate Preview")
+        preview_btn.setProperty("class", "primary")
+        preview_btn.clicked.connect(self.update_preview)
+        buttons_layout.addWidget(preview_btn)
+
+        save_btn = QPushButton("Save Files")
+        save_btn.clicked.connect(self.save_files)
+        buttons_layout.addWidget(save_btn)
+
+        buttons_group.setLayout(buttons_layout)
+        left_column.addWidget(buttons_group)
+
+        left_column.addStretch()
+        main_layout.addLayout(left_column)
+
+        # Vidurinė kolona - LUN konfigūracija
+        middle_column = QVBoxLayout()
+
+        # LUN Configuration
+        lun_group = QGroupBox("LUN Configuration")
+        self.lun_layout = QVBoxLayout()
+        self.lun_layout.setSpacing(8)
+
+        # Add LUN button and container header
+        header_layout = QHBoxLayout()
+
+        header_label = QLabel("Configured LUNs")
+        header_label.setStyleSheet("font-weight: bold;")
+        header_layout.addWidget(header_label)
+
+        add_btn = QPushButton("➕ Add LUN")
+        add_btn.setMaximumWidth(100)
+        add_btn.clicked.connect(self.add_lun)
+        header_layout.addWidget(add_btn, alignment=Qt.AlignRight)
+
+        self.lun_layout.addLayout(header_layout)
+
+        # Scroll area for LUN entries
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setMinimumHeight(300)
+
+        scroll_widget = QWidget()
+        self.lun_container = QVBoxLayout(scroll_widget)
+        self.lun_container.setSpacing(8)
+        self.lun_container.addStretch()
+        scroll.setWidget(scroll_widget)
+
+        self.lun_layout.addWidget(scroll)
+        lun_group.setLayout(self.lun_layout)
+        middle_column.addWidget(lun_group)
+        middle_column.addStretch()
+
+        main_layout.addLayout(middle_column)
+
+        # Dešinė kolona - Preview
+        right_column = QVBoxLayout()
+
+        # Preview
+        preview_group = QGroupBox("Configuration Preview")
+        preview_layout = QVBoxLayout()
+        preview_layout.setSpacing(8)
+
+        self.preview_text = QTextEdit()
+        self.preview_text.setReadOnly(True)
+        self.preview_text.setFont(QFont("Consolas", 9))
+        self.preview_text.setMinimumWidth(300)
+        preview_layout.addWidget(self.preview_text)
+
+        preview_group.setLayout(preview_layout)
+        right_column.addWidget(preview_group)
+
+        main_layout.addLayout(right_column)
+
+        # Set column stretch factors
+        main_layout.setStretch(0, 2)
+        main_layout.setStretch(1, 3)
+        main_layout.setStretch(2, 2)
+
+        # Add initial LUN
+        self.add_lun()
+
+    def add_lun(self):
+        """Prideda naują LUN įvesties eilutę"""
+        lun_frame = QFrame()
+        lun_frame.setStyleSheet("QFrame { background: #f7f9fc; border-radius: 4px; padding: 8px; }")
+        lun_layout = QHBoxLayout()
+        lun_layout.setSpacing(8)
+        lun_layout.setContentsMargins(8, 8, 8, 8)
+
+        fields = {
+            "group": QLineEdit("HDID"),
+            "name": QLineEdit("GAD_TEST"),
+            "ldev": QLineEdit("52735")
+        }
+
+        # Compact grid layout for fields
+        fields_layout = QGridLayout()
+        fields_layout.setSpacing(4)
+        fields_layout.setContentsMargins(0, 0, 0, 0)
+
+        for col, (key, value) in enumerate(fields.items()):
+            fields_layout.addWidget(QLabel(f"{key.title()}:"), 0, col*2)
+            fields_layout.addWidget(value, 0, col*2+1)
+            if key == "group":
+                value.setFixedWidth(60)
+            elif key == "name":
+                value.setFixedWidth(100)
+            elif key == "ldev":
+                value.setFixedWidth(60)
+
+        lun_layout.addLayout(fields_layout)
+
+        # Remove button
+        remove_btn = QPushButton("×")
+        remove_btn.setFixedSize(20, 20)
+        remove_btn.setStyleSheet("""
+            QPushButton {
+                background: #f0f0f0;
+                border: none;
+                border-radius: 10px;
+                color: #666;
+                font-weight: bold;
+                padding: 0;
+                margin: 0;
+            }
+            QPushButton:hover {
+                background: #e0e0e0;
+                color: #333;
+            }
+        """)
+        remove_btn.clicked.connect(lambda: self.remove_lun(lun_frame))
+        lun_layout.addWidget(remove_btn)
+
+        lun_frame.setLayout(lun_layout)
+        lun_frame.fields = fields
+
+        self.lun_container.insertWidget(self.lun_container.count() - 1, lun_frame)
+
+    def remove_lun(self, lun_frame):
+        """Pašalina LUN įvesties eilutę"""
+        if self.lun_container.count() > 1:
+            lun_frame.deleteLater()
+        else:
+            QMessageBox.warning(self, "Warning", "Cannot remove the last LUN!")
+
+    def get_lun_values(self):
+        """Surenka visų LUN įvesčių reikšmes"""
+        values = []
+        for i in range(self.lun_container.count()):
+            widget = self.lun_container.itemAt(i).widget()
+            if widget and isinstance(widget, QFrame):
+                values.append({
+                    "group": widget.fields["group"].text(),
+                    "name": widget.fields["name"].text(),
+                    "ldev": widget.fields["ldev"].text()
+                })
+        return values
+
+    def validate_inputs(self) -> bool:
+        """Patikrina įvesties laukų teisingumą"""
+        # Tikriname IP adresus
+        ip_pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
+
+        if not re.match(ip_pattern, self.ip_entry.text()):
+            QMessageBox.warning(self, "Validation Error", "Invalid HORCM server IP address format")
+            return False
+
+        if not re.match(ip_pattern, self.vsp1_ip.text()):
+            QMessageBox.warning(self, "Validation Error", "Invalid VSP1 IP address format")
+            return False
+
+        if not re.match(ip_pattern, self.vsp2_ip.text()):
+            QMessageBox.warning(self, "Validation Error", "Invalid VSP2 IP address format")
+            return False
+
+        # Tikriname serijos numerius
+        if not self.vsp1_serial.text().isdigit() or len(self.vsp1_serial.text()) != 6:
+            QMessageBox.warning(self, "Validation Error", "VSP1 serial number must be 6 digits")
+            return False
+
+        if not self.vsp2_serial.text().isdigit() or len(self.vsp2_serial.text()) != 6:
+            QMessageBox.warning(self, "Validation Error", "VSP2 serial number must be 6 digits")
+            return False
+
+        # Tikriname LUN konfigūracijas
+        luns = self.get_lun_values()
+        if not luns:
+            QMessageBox.warning(self, "Validation Error", "At least one LUN configuration is required")
+            return False
+
+        for lun in luns:
+            if not lun["group"]:
+                QMessageBox.warning(self, "Validation Error", "Group ID cannot be empty")
+                return False
+
+            if not lun["name"]:
+                QMessageBox.warning(self, "Validation Error", "Device name cannot be empty")
+                return False
+
+            if not lun["ldev"].isdigit():
+                QMessageBox.warning(self, "Validation Error", "LDEV number must be numeric")
+                return False
+
+        return True
+
+    def update_preview(self):
+        """Atnaujina konfigūracijos peržiūrą"""
+        try:
+            if not self.validate_inputs():
+                return
+
+            preview = "=== HORCM10.conf ===\n"
+            preview += self.generate_horcm10()
+            preview += "\n\n=== HORCM20.conf ===\n"
+            preview += self.generate_horcm20()
+
+            self.preview_text.setPlainText(preview)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to generate configuration: {str(e)}")
+
+    def save_files(self):
+        """Išsaugo sugeneruotus failus"""
+        if not self.validate_inputs():
+            return
+
+        try:
+            save_dir = QFileDialog.getExistingDirectory(
+                self,
+                "Select Directory to Save Configuration Files",
+                "",
+                QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks
+            )
+
+            if save_dir:
+                with open(f"{save_dir}/horcm10.conf", 'w') as f:
+                    f.write(self.generate_horcm10())
+
+                with open(f"{save_dir}/horcm20.conf", 'w') as f:
+                    f.write(self.generate_horcm20())
+
+                QMessageBox.information(
+                    self,
+                    "Success",
+                    f"Configuration files saved successfully to:\n{save_dir}"
+                )
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to save configuration files:\n{str(e)}"
+            )
+
+    def generate_horcm10(self):
+        """Generuoja HORCM10.conf turinį"""
+        luns = self.get_lun_values()
+        if not luns:
+            return ""
+
+        # LDEV sekcija
+        ldev_lines = []
+        for lun in luns:
+            ldev_lines.append(f"{lun['group']}    {lun['name']}    "
+                              f"{self.vsp1_serial.text()}    {lun['ldev']}    0")
+
+        # INST sekcija
+        unique_groups = {lun["group"] for lun in luns}
+        inst_lines = []
+        for group in sorted(unique_groups):
+            inst_lines.append(f"{group}    {self.ip_entry.text()}    5020")
+
+        return f"""HORCM_MON
+# ip_address service poll(10ms) timeout(10ms)
+{self.ip_entry.text()}    5010    1000       3000
+
+HORCM_CMD
+# VSP1 (Serial No.: {self.vsp1_serial.text()})
+\\\\.\CMD-{self.vsp1_serial.text()}-{luns[0]['ldev']}
+
+HORCM_LDEV
+# DeviceGroup, DeviceName, Serial#, CU:LDEV(LDEV#), MU#
+{chr(10).join(ldev_lines)}
+
+HORCM_INST
+# DeviceGroup         ip_address      service
+{chr(10).join(inst_lines)}"""
+
+    def generate_horcm20(self):
+        """Generuoja HORCM20.conf turinį"""
+        luns = self.get_lun_values()
+        if not luns:
+            return ""
+
+        # LDEV sekcija
+        ldev_lines = []
+        for lun in luns:
+            ldev_lines.append(f"{lun['group']}    {lun['name']}    "
+                              f"{self.vsp2_serial.text()}    {lun['ldev']}    0")
+
+        # INST sekcija
+        unique_groups = {lun["group"] for lun in luns}
+        inst_lines = []
+        for group in sorted(unique_groups):
+            inst_lines.append(f"{group}    {self.ip_entry.text()}    5010")
+
+        return f"""HORCM_MON
+# ip_address service poll(10ms) timeout(10ms)
+{self.ip_entry.text()}    5020    1000       3000
+
+HORCM_CMD
+# VSP2 (Serial No.: {self.vsp2_serial.text()})
+\\\\.\CMD-{self.vsp2_serial.text()}-{luns[0]['ldev']}
+
+HORCM_LDEV
+# DeviceGroup, DeviceName, Serial#, CU:LDEV(LDEV#), MU#
+{chr(10).join(ldev_lines)}
+
+HORCM_INST
+# DeviceGroup         ip_address      service
+{chr(10).join(inst_lines)}"""
+
+    def keyPressEvent(self, event):
+        """Apdoroja klavišų paspaudimus"""
+        # Ctrl+S - išsaugoti
+        if event.modifiers() & Qt.ControlModifier and event.key() == Qt.Key_S:
+            self.save_files()
+        # Ctrl+P - peržiūra
+        elif event.modifiers() & Qt.ControlModifier and event.key() == Qt.Key_P:
+            self.update_preview()
+        else:
+            super().keyPressEvent(event)
+
 class MainWindow(QMainWindow):
     def show_help(self):
         """Rodo pagalbos dialogą"""
@@ -1564,19 +1583,20 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        # Auto-updater initialization
-        self.app_version = "0.19 beta"
-        self.auto_updater = GithubAutoUpdater(
-            self.app_version,
-            "aurimaslt",
-            "GADmanager"
-        )
-        self.copy_controller = CopyProgress()
-        self.pairs = []
+        self.init_update_controller()
+        self.init_gad_controller()
         self.init_ui()
 
+    def init_update_controller(self):
+        """Inicializuoja atnaujinimų valdiklį"""
+        self.update_controller = UpdateController(self)
+
+    def init_gad_controller(self):
+        """Inicializuoja GAD porų valdiklį"""
+        self.gad_controller = GADController()
+
     def init_ui(self):
-        self.setWindowTitle("GAD Manager 0.19 beta")
+        self.setWindowTitle(f"GAD Manager {APP_VERSION}")
         self.setMinimumSize(1400, 750)
         self.setStyleSheet(ProStyle.STYLE)
 
@@ -1672,7 +1692,7 @@ class MainWindow(QMainWindow):
 
     def update_from_parser(self, new_pairs: List[GADPair]):
         """Atnaujina porų informaciją iš parserio"""
-        self.pairs = new_pairs
+        self.gad_controller.update_pairs(new_pairs)
         self.refresh_pairs_display()
 
     def refresh_pairs_display(self):
@@ -1684,7 +1704,7 @@ class MainWindow(QMainWindow):
                 child.widget().deleteLater()
 
         # Prideda naujas poras
-        for pair in self.pairs:
+        for pair in self.gad_controller.pairs:
             pair_panel = GadPairPanel(pair)
             self.pairs_container.addWidget(pair_panel)
 
@@ -1695,54 +1715,13 @@ class MainWindow(QMainWindow):
 
     def handle_command(self, pair: GADPair, command: str):
         """Apdoroja mygtukų paspaudimus"""
-        cmd_text = self.get_command_for_operation(pair, command)
+        cmd_text = self.gad_controller.get_command_for_operation(pair, command)
         self.cmd_output.set_command(cmd_text)
-
-    def get_command_for_operation(self, pair: GADPair, operation: str) -> str:
-        """Generuoja komandą pagal operacijos tipą"""
-        commands = {
-            "split_vsp1": f"pairsplit -g {pair.group} {pair.left_storage.instance}",
-            "split_vsp2": f"pairsplit -g {pair.group} -RS {pair.right_storage.instance}",
-            "swap_p": f"pairresync -g {pair.group} -swaps {pair.right_storage.instance}",
-            "swap_s": f"pairresync -g {pair.group} -swaps {pair.left_storage.instance}",
-            "resync": self.get_resync_command(pair)
-        }
-        return commands.get(operation, "Unknown command")
-
-    def get_resync_command(self, pair: GADPair) -> str:
-        """Generuoja resync komandą"""
-        if (pair.right_storage.role == 'S-VOL' and
-            pair.right_storage.status == 'SSWS' and
-            pair.left_storage.role == 'P-VOL' and
-            pair.left_storage.status == 'PSUS'):
-            return (f"pairresync -g {pair.group} -swaps -IH20\n"
-                   f"pairresync -g {pair.group} -swaps -IH10")
-        elif (pair.left_storage.role == 'S-VOL' and
-              pair.left_storage.status == 'SSWS' and
-              pair.right_storage.role == 'P-VOL' and
-              pair.right_storage.status == 'PSUS'):
-            return (f"pairresync -g {pair.group} -swaps -IH10\n"
-                   f"pairresync -g {pair.group} -IH10")
-        elif (pair.left_storage.role == 'P-VOL' and
-              pair.left_storage.status == 'PSUS' and
-              pair.right_storage.role == 'S-VOL' and
-              pair.right_storage.status == 'SSUS'):
-            return f"pairresync -g {pair.group} -IH10"
-        else:
-            return "# Cannot perform resync - invalid pair state"
-
-    def refresh_status(self):
-        """Atnaujina GUI būseną"""
-        if self.pairs:
-            self.refresh_pairs_display()
-            self.statusBar().showMessage("Status refreshed")
-        else:
-            self.statusBar().showMessage("No pairs to refresh")
 
     def check_for_updates(self):
         """Checks for and performs update if available"""
         self.statusBar().showMessage("Checking for updates...")
-        if not self.auto_updater.check_and_update(self):
+        if not self.update_controller.check_for_updates():
             self.statusBar().showMessage("No updates available")
         else:
             self.statusBar().showMessage("Update completed - please restart")
