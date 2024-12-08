@@ -2,7 +2,7 @@
 # Version info
 ################################
 APP_VERSION = "0.21 beta"
-APP_RELEASE_DATE = "2024-02-15"
+APP_RELEASE_DATE = "2024-12-08"
 ################################
 import os
 import sys
