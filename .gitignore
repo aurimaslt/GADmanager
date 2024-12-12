@@ -8,3 +8,5 @@ venv/
 # Ignore build output
 /dist/
 /build/
+/test/
+build.py
