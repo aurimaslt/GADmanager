@@ -1,10 +1,11 @@
 ################################
 # Version info
 ################################
-APP_VERSION = "0.21 beta"
-APP_RELEASE_DATE = "2024-12-08"
+APP_VERSION = "0.22 beta"
+APP_RELEASE_DATE = "2024-12-12"
 ################################
 import os
+os.environ['QT_PLUGIN_PATH'] = 'C:/Users/AurimasLesmanavičius/AppData/Roaming/Python/Python312/site-packages/PyQt5/Qt5/plugins'
 import sys
 import re
 import tempfile
@@ -803,14 +804,13 @@ class OutputParserFrame(QWidget):
         msg.setText("Example of the expected pairdisplay output format:")
         
         example = """Group   PairVol(L/R) (Port#,TID, LU),Seq#,LDEV#.P/S,Status,Fence,   %,P-LDEV# M CTG JID AP EM       E-Seq# E-LDEV# R/W QM DM P PR CS D_Status ST ELV PGID           CT(s) LUT
-HDID    GAD_TEST_HA(L) (CL8-F-8, 0,   5)445329  6001.P-VOL PSUS NEVER ,  100  6001 -   -   0  4  -            -       - B/B -  D  N D   3 -         - -      -               - -
-HDID    GAD_TEST_HA(R) (CL8-F-12, 0,   5)445317  6001.S-VOL SSWS NEVER ,  100  6001 -   -   0  4  -            -       - L/L -  D  N D   3 -         - -      -               - -
-OR
+HDID    GAD_TEST_HA(L) (CL8-F-8, 0,   5)811111  6001.P-VOL PSUS NEVER ,  100  6001 -   -   0  4  -            -       - B/B -  D  N D   3 -         - -      -               - -
+HDID    GAD_TEST_HA(R) (CL8-F-12, 0,   5)822222  6001.S-VOL SSWS NEVER ,  100  6001 -   -   0  4  -            -       - L/L -  D  N D   3 -         - -      -               - -
 Group   PairVol(L/R) (Port#,TID, LU),Seq#,LDEV#.P/S,Status,Fence,   %,P-LDEV# M CTG JID AP EM       E-Seq# E-LDEV# R/W QM DM P PR CS D_Status ST ELV PGID           CT(s) LUT
-HDID    GAD_TEST_HA(L) (CL8-F-8, 0,   5)445329  6001.P-VOL PSUS NEVER ,  100  6001 -   -   0  4  -            -       - B/B -  D  N D   3 -         - -      -               - -
-HDID    GAD_TEST_HA(R) (CL8-F-12, 0,   5)445317  6001.S-VOL SSWS NEVER ,  100  6001 -   -   0  4  -            -       - L/L -  D  N D   3 -         - -      -               - -
-HDID2    GAD_TEST_HA2(L) (CL8-F-8, 0,   5)445329  6002.P-VOL PAIR NEVER ,  100  6002 -   -   0  4  -            -       - L/L -  D  N D   3 -         - -      -               - -
-HDID2    GAD_TEST_HA2(R) (CL8-F-12, 0,   5)445317  6002.S-VOL PAIR NEVER ,  100  6002 -   -   0  4  -            -       - L/L -  D  N D   3 -         - -      -               - -"""
+HDID    GAD_TEST_HA(L) (CL8-F-8, 0,   5)811111  6001.P-VOL PSUS NEVER ,  100  6001 -   -   0  4  -            -       - B/B -  D  N D   3 -         - -      -               - -
+HDID    GAD_TEST_HA(R) (CL8-F-12, 0,   5)822222  6001.S-VOL SSWS NEVER ,  100  6001 -   -   0  4  -            -       - L/L -  D  N D   3 -         - -      -               - -
+HDID2    GAD_TEST_HA2(L) (CL8-F-8, 0,   5)811111  6002.P-VOL PAIR NEVER ,  100  6002 -   -   0  4  -            -       - L/L -  D  N D   3 -         - -      -               - -
+HDID2    GAD_TEST_HA2(R) (CL8-F-12, 0,   5)822222  6002.S-VOL PAIR NEVER ,  100  6002 -   -   0  4  -            -       - L/L -  D  N D   3 -         - -      -               - -"""
       
         text_edit = QTextEdit()
         text_edit.setPlainText(example)
@@ -1121,11 +1121,26 @@ class AboutDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(20)
         
-        # Logo
+        # Logo su pataisytu keliu
         logo_label = QLabel()
-        icon = QIcon("icon.svg")
-        pixmap = icon.pixmap(QSize(128, 128))
-        logo_label.setPixmap(pixmap)
+        try:
+            if hasattr(sys, '_MEIPASS'):
+                base_path = sys._MEIPASS
+            else:
+                base_path = os.path.dirname(os.path.abspath(__file__))
+                
+            icon_path = os.path.join(base_path, "icon.svg")
+            if os.path.exists(icon_path):
+                icon = QIcon(icon_path)
+                # Sukuriame pixmap su nurodytu dydžiu
+                pixmap = icon.pixmap(QSize(128, 128))
+                logo_label.setPixmap(pixmap)
+                print(f"About logo įkeltas iš: {icon_path}")
+            else:
+                print(f"Įspėjimas: About logo failas nerastas {icon_path}")
+        except Exception as e:
+            print(f"Klaida įkeliant about logo: {e}")
+        
         logo_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(logo_label)
         
@@ -1187,159 +1202,101 @@ class AboutDialog(QDialog):
         button_box.accepted.connect(self.accept)
         layout.addWidget(button_box)
 
-class HORCMConfigFrame(QFrame):
-    """HORCM konfigūracijos generavimo komponentas"""
+class ServerParametersGroup(QGroupBox):
+    """HORCM serverio parametrų grupė"""
+    def __init__(self, parent=None):
+        super().__init__("HORCM Server Parameters", parent)
+        self.init_ui()
+        
+    def init_ui(self):
+        layout = QFormLayout()
+        layout.setSpacing(8)
+        
+        self.ip_entry = QLineEdit()
+        self.ip_entry.setPlaceholderText("127.0.0.1")
+        layout.addRow("HORCM Server IP:", self.ip_entry)
+        
+        info_label = QLabel("(This IP will be used for HORCM service)")
+        info_label.setStyleSheet("color: #666; font-style: italic;")
+        layout.addRow("", info_label)
+        
+        self.setLayout(layout)
+        
+    def is_empty(self) -> bool:
+        """Patikrina ar laukas tuščias"""
+        return not self.ip_entry.text()
+        
+    def get_ip(self) -> str:
+        """Grąžina įvestą IP arba placeholder reikšmę"""
+        return self.ip_entry.text() or self.ip_entry.placeholderText()
+
+class VSPParametersGroup(QGroupBox):
+    """VSP parametrų grupė"""
+    def __init__(self, vsp_num, parent=None):
+        super().__init__(f"VSP{vsp_num} Parameters", parent)
+        self.vsp_num = vsp_num
+        self.init_ui()
+        
+    def init_ui(self):
+        layout = QFormLayout()
+        layout.setSpacing(8)
+        
+        self.serial_entry = QLineEdit()
+        self.ip_entry = QLineEdit()
+        
+        self.serial_entry.setPlaceholderText(f"8{self.vsp_num*11111}")
+        self.ip_entry.setPlaceholderText(f"{self.vsp_num}.{self.vsp_num}.{self.vsp_num}.{self.vsp_num}")
+        
+        layout.addRow("Serial Number:", self.serial_entry)
+        layout.addRow("IP Address:", self.ip_entry)
+        
+        self.setLayout(layout)
+        
+    def is_empty(self) -> bool:
+        """Patikrina ar visi laukai tušti"""
+        return not self.serial_entry.text() and not self.ip_entry.text()
+        
+    def get_values(self) -> dict:
+        """Grąžina įvestas reikšmes arba placeholder reikšmes"""
+        if self.is_empty():
+            return {
+                'serial': self.serial_entry.placeholderText(),
+                'ip': self.ip_entry.placeholderText()
+            }
+        return {
+            'serial': self.serial_entry.text(),
+            'ip': self.ip_entry.text()
+        }
+
+class LUNEntry(QFrame):
+    """Vieno LUN įrašo komponentas"""
+    removed = pyqtSignal(object)
+    
     def __init__(self, parent=None):
         super().__init__(parent)
         self.init_ui()
-
+        
     def init_ui(self):
-        main_layout = QHBoxLayout(self)
-        main_layout.setSpacing(16)
-
-        # Kairė kolona - Visi parametrai
-        left_column = QVBoxLayout()
-
-        # Server Parameters
-        server_group = QGroupBox("HORCM Server Parameters")
-        server_layout = QFormLayout()
-        server_layout.setSpacing(8)
-
-        self.ip_entry = QLineEdit("127.0.0.1")
-        server_layout.addRow("HORCM Server IP:", self.ip_entry)
-
-        info_label = QLabel("(This IP will be used for HORCM service)")
-        info_label.setStyleSheet("color: #666; font-style: italic;")
-        server_layout.addRow("", info_label)
-
-        server_group.setLayout(server_layout)
-        left_column.addWidget(server_group)
-
-        # VSP Parameters Groups
-        for vsp_num in [1, 2]:
-            vsp_group = QGroupBox(f"VSP{vsp_num} Parameters")
-            vsp_layout = QFormLayout()
-            vsp_layout.setSpacing(8)
-
-            serial_entry = QLineEdit(f"8{vsp_num*11111}")
-            ip_entry = QLineEdit(f"{vsp_num}.{vsp_num}.{vsp_num}.{vsp_num}")
-            setattr(self, f"vsp{vsp_num}_serial", serial_entry)
-            setattr(self, f"vsp{vsp_num}_ip", ip_entry)
-
-            vsp_layout.addRow("Serial Number:", serial_entry)
-            vsp_layout.addRow("IP Address:", ip_entry)
-
-            vsp_group.setLayout(vsp_layout)
-            left_column.addWidget(vsp_group)
-
-        # Buttons
-        buttons_group = QGroupBox("Actions")
-        buttons_layout = QHBoxLayout()
-        buttons_layout.setSpacing(8)
-
-        preview_btn = QPushButton("Generate Preview")
-        preview_btn.setProperty("class", "primary")
-        preview_btn.clicked.connect(self.update_preview)
-        buttons_layout.addWidget(preview_btn)
-
-        save_btn = QPushButton("Save Files")
-        save_btn.clicked.connect(self.save_files)
-        buttons_layout.addWidget(save_btn)
-
-        buttons_group.setLayout(buttons_layout)
-        left_column.addWidget(buttons_group)
-
-        left_column.addStretch()
-        main_layout.addLayout(left_column)
-
-        # Vidurinė kolona - LUN konfigūracija
-        middle_column = QVBoxLayout()
-
-        # LUN Configuration
-        lun_group = QGroupBox("LUN Configuration")
-        self.lun_layout = QVBoxLayout()
-        self.lun_layout.setSpacing(8)
-
-        # Add LUN button and container header
-        header_layout = QHBoxLayout()
-
-        header_label = QLabel("Configured LUNs")
-        header_label.setStyleSheet("font-weight: bold;")
-        header_layout.addWidget(header_label)
-
-        add_btn = QPushButton("➕ Add LUN")
-        add_btn.setMaximumWidth(100)
-        add_btn.clicked.connect(self.add_lun)
-        header_layout.addWidget(add_btn, alignment=Qt.AlignRight)
-
-        self.lun_layout.addLayout(header_layout)
-
-        # Scroll area for LUN entries
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setMinimumHeight(300)
-
-        scroll_widget = QWidget()
-        self.lun_container = QVBoxLayout(scroll_widget)
-        self.lun_container.setSpacing(8)
-        self.lun_container.addStretch()
-        scroll.setWidget(scroll_widget)
-
-        self.lun_layout.addWidget(scroll)
-        lun_group.setLayout(self.lun_layout)
-        middle_column.addWidget(lun_group)
-        middle_column.addStretch()
-
-        main_layout.addLayout(middle_column)
-
-        # Dešinė kolona - Preview
-        right_column = QVBoxLayout()
-
-        # Preview
-        preview_group = QGroupBox("Configuration Preview")
-        preview_layout = QVBoxLayout()
-        preview_layout.setSpacing(8)
-
-        self.preview_text = QTextEdit()
-        self.preview_text.setReadOnly(True)
-        self.preview_text.setFont(QFont("Consolas", 9))
-        self.preview_text.setMinimumWidth(300)
-        preview_layout.addWidget(self.preview_text)
-
-        preview_group.setLayout(preview_layout)
-        right_column.addWidget(preview_group)
-
-        main_layout.addLayout(right_column)
-
-        # Set column stretch factors
-        main_layout.setStretch(0, 2)
-        main_layout.setStretch(1, 3)
-        main_layout.setStretch(2, 2)
-
-        # Add initial LUN
-        self.add_lun()
-
-    def add_lun(self):
-        """Prideda naują LUN įvesties eilutę"""
-        lun_frame = QFrame()
-        lun_frame.setStyleSheet("QFrame { background: #f7f9fc; border-radius: 4px; padding: 8px; }")
-        lun_layout = QHBoxLayout()
-        lun_layout.setSpacing(8)
-        lun_layout.setContentsMargins(8, 8, 8, 8)
-
-        fields = {
-            "group": QLineEdit("HDID"),
-            "name": QLineEdit("GAD_TEST"),
-            "ldev": QLineEdit("52735")
+        self.setStyleSheet("QFrame { background: #f7f9fc; border-radius: 4px; padding: 8px; }")
+        layout = QHBoxLayout()
+        layout.setSpacing(8)
+        layout.setContentsMargins(8, 8, 8, 8)
+        
+        self.fields = {
+            "group": QLineEdit(),
+            "name": QLineEdit(),
+            "ldev": QLineEdit()
         }
-
-        # Compact grid layout for fields
+        
+        self.fields["group"].setPlaceholderText("ORACLE")
+        self.fields["name"].setPlaceholderText("GAD_TEST_DB")
+        self.fields["ldev"].setPlaceholderText("52735")
+        
         fields_layout = QGridLayout()
         fields_layout.setSpacing(4)
         fields_layout.setContentsMargins(0, 0, 0, 0)
-
-        for col, (key, value) in enumerate(fields.items()):
+        
+        for col, (key, value) in enumerate(self.fields.items()):
             fields_layout.addWidget(QLabel(f"{key.title()}:"), 0, col*2)
             fields_layout.addWidget(value, 0, col*2+1)
             if key == "group":
@@ -1348,10 +1305,9 @@ class HORCMConfigFrame(QFrame):
                 value.setFixedWidth(100)
             elif key == "ldev":
                 value.setFixedWidth(60)
-
-        lun_layout.addLayout(fields_layout)
-
-        # Remove button
+                
+        layout.addLayout(fields_layout)
+        
         remove_btn = QPushButton("×")
         remove_btn.setFixedSize(20, 20)
         remove_btn.setStyleSheet("""
@@ -1369,204 +1325,434 @@ class HORCMConfigFrame(QFrame):
                 color: #333;
             }
         """)
-        remove_btn.clicked.connect(lambda: self.remove_lun(lun_frame))
-        lun_layout.addWidget(remove_btn)
+        remove_btn.clicked.connect(self.remove_self)
+        layout.addWidget(remove_btn)
+        
+        self.setLayout(layout)
+    
+    def has_any_input(self) -> bool:
+        """Patikrina ar bent vienas laukas yra užpildytas"""
+        return any(field.text() for field in self.fields.values())
+        
+    def is_empty(self) -> bool:
+        """Patikrina ar visi laukai tušti"""
+        return all(not field.text() for field in self.fields.values())
+    
+    def is_fully_filled(self) -> bool:
+        """Patikrina ar visi laukai užpildyti"""
+        return all(field.text() for field in self.fields.values())
+        
+    def get_values(self) -> dict:
+        """Grąžina įvestas reikšmes arba placeholder reikšmes"""
+        if self.is_empty():
+            return {k: v.placeholderText() for k, v in self.fields.items()}
+        elif not self.is_fully_filled():
+            return None
+        return {k: v.text() for k, v in self.fields.items()}
+        
+    def remove_self(self):
+        """Pašalina šį LUN įrašą"""
+        self.removed.emit(self)
 
-        lun_frame.setLayout(lun_layout)
-        lun_frame.fields = fields
-
-        self.lun_container.insertWidget(self.lun_container.count() - 1, lun_frame)
-
-    def remove_lun(self, lun_frame):
-        """Pašalina LUN įvesties eilutę"""
-        if self.lun_container.count() > 1:
-            lun_frame.deleteLater()
+class LUNConfigurationGroup(QGroupBox):
+    """LUN konfigūracijos grupė"""
+    def __init__(self, parent=None):
+        super().__init__("LUN Configuration", parent)
+        self.init_ui()
+        
+    def init_ui(self):
+        layout = QVBoxLayout()
+        layout.setSpacing(8)
+        
+        header_layout = QHBoxLayout()
+        header_label = QLabel("Configured LUNs")
+        header_label.setStyleSheet("font-weight: bold;")
+        header_layout.addWidget(header_label)
+        
+        add_btn = QPushButton("➕ Add LUN")
+        add_btn.setMaximumWidth(100)
+        add_btn.clicked.connect(self.add_lun)
+        header_layout.addWidget(add_btn, alignment=Qt.AlignRight)
+        
+        layout.addLayout(header_layout)
+        
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setMinimumHeight(300)
+        
+        scroll_widget = QWidget()
+        self.lun_container = QVBoxLayout(scroll_widget)
+        self.lun_container.setSpacing(8)
+        self.lun_container.addStretch()
+        scroll.setWidget(scroll_widget)
+        
+        layout.addWidget(scroll)
+        self.setLayout(layout)
+        
+        self.add_lun()
+        
+    def add_lun(self):
+        """Prideda naują LUN įrašą"""
+        lun = LUNEntry()
+        lun.removed.connect(self.remove_lun)
+        self.lun_container.insertWidget(self.lun_container.count() - 1, lun)
+        
+    def remove_lun(self, lun):
+        """Pašalina LUN įrašą"""
+        if self.lun_container.count() > 2:  # >2 because of stretch
+            lun.deleteLater()
         else:
-            QMessageBox.warning(self, "Warning", "Cannot remove the last LUN!")
-
-    def get_lun_values(self):
-        """Surenka visų LUN įvesčių reikšmes"""
-        values = []
-        for i in range(self.lun_container.count()):
+            QMessageBox.warning(self, "Warning", "Cannot remove the last LUN entry!")
+            
+    def validate_luns(self) -> tuple[bool, str, list]:
+        """Validuoja visus LUN įrašus"""
+        lun_entries = []
+        has_any_input = False
+        
+        for i in range(self.lun_container.count() - 1):
             widget = self.lun_container.itemAt(i).widget()
-            if widget and isinstance(widget, QFrame):
-                values.append({
-                    "group": widget.fields["group"].text(),
-                    "name": widget.fields["name"].text(),
-                    "ldev": widget.fields["ldev"].text()
-                })
-        return values
+            if isinstance(widget, LUNEntry):
+                lun_entries.append(widget)
+                if widget.has_any_input():
+                    has_any_input = True
 
-    def validate_inputs(self) -> bool:
-        """Patikrina įvesties laukų teisingumą"""
-        # Tikriname IP adresus
+        if not has_any_input:
+            return True, "", [lun_entries[0].get_values()]
+            
+        valid_luns = []
+        for lun in lun_entries:
+            if not lun.is_empty() and not lun.is_fully_filled():
+                return False, "Some LUN entries are partially filled. Please fill all fields or leave them empty.", []
+            if lun.is_fully_filled():
+                valid_luns.append(lun.get_values())
+
+        if not valid_luns:
+            return False, "No valid LUN entries found. Please fill all required fields.", []
+            
+        return True, "", valid_luns
+            
+    def get_lun_values(self) -> list:
+        """Grąžina validžių LUN įrašų sąrašą"""
+        is_valid, error_message, valid_luns = self.validate_luns()
+        
+        if not is_valid:
+            QMessageBox.warning(self, "Validation Error", error_message)
+            return []
+            
+        return valid_luns
+
+class HORCMConfigGenerator:
+    """HORCM konfigūracijos generavimo klasė"""
+    def __init__(self):
+        self.re = __import__('re')
+    
+    def validate_inputs(self, server_ip: str, vsp1: dict, vsp2: dict, luns: list) -> bool:
+        """Validuoja įvesties duomenis"""
+        # IP adresų validacija
         ip_pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
+        for ip in [server_ip, vsp1['ip'], vsp2['ip']]:
+            if not self.re.match(ip_pattern, ip):
+                raise ValueError(f"Invalid IP address format: {ip}")
 
-        if not re.match(ip_pattern, self.ip_entry.text()):
-            QMessageBox.warning(self, "Validation Error", "Invalid HORCM server IP address format")
-            return False
+        # Serijos numerių validacija
+        for serial in [vsp1['serial'], vsp2['serial']]:
+            if not serial.isdigit() or len(serial) != 6:
+                raise ValueError(f"Serial number must be 6 digits: {serial}")
 
-        if not re.match(ip_pattern, self.vsp1_ip.text()):
-            QMessageBox.warning(self, "Validation Error", "Invalid VSP1 IP address format")
-            return False
-
-        if not re.match(ip_pattern, self.vsp2_ip.text()):
-            QMessageBox.warning(self, "Validation Error", "Invalid VSP2 IP address format")
-            return False
-
-        # Tikriname serijos numerius
-        if not self.vsp1_serial.text().isdigit() or len(self.vsp1_serial.text()) != 6:
-            QMessageBox.warning(self, "Validation Error", "VSP1 serial number must be 6 digits")
-            return False
-
-        if not self.vsp2_serial.text().isdigit() or len(self.vsp2_serial.text()) != 6:
-            QMessageBox.warning(self, "Validation Error", "VSP2 serial number must be 6 digits")
-            return False
-
-        # Tikriname LUN konfigūracijas
-        luns = self.get_lun_values()
+        # LUN validacija
         if not luns:
-            QMessageBox.warning(self, "Validation Error", "At least one LUN configuration is required")
-            return False
+            raise ValueError("At least one LUN configuration is required")
 
         for lun in luns:
             if not lun["group"]:
-                QMessageBox.warning(self, "Validation Error", "Group ID cannot be empty")
-                return False
-
+                raise ValueError("Group ID cannot be empty")
             if not lun["name"]:
-                QMessageBox.warning(self, "Validation Error", "Device name cannot be empty")
-                return False
-
+                raise ValueError("Device name cannot be empty")
             if not lun["ldev"].isdigit():
-                QMessageBox.warning(self, "Validation Error", "LDEV number must be numeric")
-                return False
+                raise ValueError("LDEV number must be numeric")
 
         return True
+
+    def generate_horcm10(self, server_ip: str, vsp1: dict, luns: list) -> str:
+        """Generuoja HORCM10.conf turinį"""
+        # LDEV sekcija
+        ldev_lines = []
+        for lun in luns:
+            ldev_lines.append(f"{lun['group']}    {lun['name']}    "
+                            f"{vsp1['serial']}    {lun['ldev']}    0")
+
+        # INST sekcija
+        unique_groups = {lun["group"] for lun in luns}
+        inst_lines = []
+        for group in sorted(unique_groups):
+            inst_lines.append(f"{group}    {server_ip}    5020")
+
+        return f"""HORCM_MON
+# ip_address service poll(10ms) timeout(10ms)
+{server_ip}    5010    1000       3000
+
+HORCM_CMD
+# VSP1 (Serial No.: {vsp1['serial']})
+\\\\.\\CMD-{vsp1['serial']}-{luns[0]['ldev']}
+
+HORCM_LDEV
+# DeviceGroup, DeviceName, Serial#, CU:LDEV(LDEV#), MU#
+{chr(10).join(ldev_lines)}
+
+HORCM_INST
+# DeviceGroup         ip_address      service
+{chr(10).join(inst_lines)}"""
+
+    def generate_horcm20(self, server_ip: str, vsp2: dict, luns: list) -> str:
+        """Generuoja HORCM20.conf turinį"""
+        # LDEV sekcija
+        ldev_lines = []
+        for lun in luns:
+            ldev_lines.append(f"{lun['group']}    {lun['name']}    "
+                            f"{vsp2['serial']}    {lun['ldev']}    0")
+
+        # INST sekcija
+        unique_groups = {lun["group"] for lun in luns}
+        inst_lines = []
+        for group in sorted(unique_groups):
+            inst_lines.append(f"{group}    {server_ip}    5010")
+
+        return f"""HORCM_MON
+# ip_address service poll(10ms) timeout(10ms)
+{server_ip}    5020    1000       3000
+
+HORCM_CMD
+# VSP2 (Serial No.: {vsp2['serial']})
+\\\\.\\CMD-{vsp2['serial']}-{luns[0]['ldev']}
+
+HORCM_LDEV
+# DeviceGroup, DeviceName, Serial#, CU:LDEV(LDEV#), MU#
+{chr(10).join(ldev_lines)}
+
+HORCM_INST
+# DeviceGroup         ip_address      service
+{chr(10).join(inst_lines)}"""
+
+class HORCMConfigFrame(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.generator = HORCMConfigGenerator()
+        self.init_ui()
+    
+    def init_ui(self):
+        main_layout = QHBoxLayout(self)
+        main_layout.setSpacing(16)
+
+        # Kairė kolona
+        left_column = QVBoxLayout()
+        
+        self.server_params = ServerParametersGroup()
+        self.vsp1_params = VSPParametersGroup(1)
+        self.vsp2_params = VSPParametersGroup(2)
+        
+        left_column.addWidget(self.server_params)
+        left_column.addWidget(self.vsp1_params)
+        left_column.addWidget(self.vsp2_params)
+
+        # Mygtukai
+        buttons_group = QGroupBox("Actions")
+        buttons_layout = QHBoxLayout()
+        buttons_layout.setSpacing(8)
+
+        preview_btn = QPushButton("Generate Preview")
+        preview_btn.setProperty("class", "primary")
+        preview_btn.clicked.connect(self.update_preview)
+        buttons_layout.addWidget(preview_btn)
+
+        save_btn = QPushButton("Save Files")
+        save_btn.clicked.connect(self.save_files)
+        buttons_layout.addWidget(save_btn)
+
+        buttons_group.setLayout(buttons_layout)
+        left_column.addWidget(buttons_group)
+        left_column.addStretch()
+
+        # Vidurinė kolona
+        self.lun_config = LUNConfigurationGroup()
+
+        # Dešinė kolona - Preview
+        right_column = QVBoxLayout()
+        preview_group = QGroupBox("Configuration Preview")
+        preview_layout = QVBoxLayout()
+        
+        self.preview_text = QTextEdit()
+        self.preview_text.setReadOnly(True)
+        self.preview_text.setFont(QFont("Consolas", 9))
+        self.preview_text.setMinimumWidth(300)
+        preview_layout.addWidget(self.preview_text)
+        
+        preview_group.setLayout(preview_layout)
+        right_column.addWidget(preview_group)
+
+        # Add columns to main layout
+        main_layout.addLayout(left_column)
+        main_layout.addWidget(self.lun_config)
+        main_layout.addLayout(right_column)
+
+        # Set column stretch factors
+        main_layout.setStretch(0, 2)  # Left column
+        main_layout.setStretch(1, 3)  # Middle column
+        main_layout.setStretch(2, 2)  # Right column
+
+    def all_fields_empty(self) -> bool:
+        """Patikrina ar visi laukai tušti"""
+        return (
+            self.server_params.is_empty() and
+            self.vsp1_params.is_empty() and
+            self.vsp2_params.is_empty()
+        )
+
+    def validate_inputs(self) -> bool:
+        """Validuoja įvesties laukus"""
+        # Jei bent vienas laukas užpildytas, visi laukai turi būti užpildyti
+        server_ip_filled = bool(self.server_params.ip_entry.text())
+        vsp1_filled = bool(self.vsp1_params.serial_entry.text()) or bool(self.vsp1_params.ip_entry.text())
+        vsp2_filled = bool(self.vsp2_params.serial_entry.text()) or bool(self.vsp2_params.ip_entry.text())
+        
+        any_field_filled = server_ip_filled or vsp1_filled or vsp2_filled
+        
+        if any_field_filled:
+            if not server_ip_filled:
+                QMessageBox.warning(self, "Validation Error", "HORCM server IP address is required!")
+                return False
+                
+            if not (self.vsp1_params.serial_entry.text() and self.vsp1_params.ip_entry.text()):
+                QMessageBox.warning(self, "Validation Error", "VSP1 serial number and IP address are required!")
+                return False
+                
+            if not (self.vsp2_params.serial_entry.text() and self.vsp2_params.ip_entry.text()):
+                QMessageBox.warning(self, "Validation Error", "VSP2 serial number and IP address are required!")
+                return False
+                
+            # Tikriname LUN konfigūracijas (ši funkcija jau turi savo pranešimus)
+            luns = self.lun_config.get_lun_values()
+            if not luns:
+                return False
+        
+        return True
+
+    def collect_data(self) -> dict:
+        """Surenka visus reikiamus duomenis iš UI"""
+        use_placeholders = self.all_fields_empty()
+        
+        if use_placeholders:
+            return {
+                'server_ip': self.server_params.get_ip(),
+                'vsp1': self.vsp1_params.get_values(),
+                'vsp2': self.vsp2_params.get_values(),
+                'luns': self.lun_config.get_lun_values()
+            }
+        else:
+            return {
+                'server_ip': self.server_params.ip_entry.text(),
+                'vsp1': {
+                    'serial': self.vsp1_params.serial_entry.text(),
+                    'ip': self.vsp1_params.ip_entry.text()
+                },
+                'vsp2': {
+                    'serial': self.vsp2_params.serial_entry.text(),
+                    'ip': self.vsp2_params.ip_entry.text()
+                },
+                'luns': self.lun_config.get_lun_values()
+            }
 
     def update_preview(self):
         """Atnaujina konfigūracijos peržiūrą"""
         try:
             if not self.validate_inputs():
                 return
-
+                
+            data = self.collect_data()
+            
+            # Validuojame surinktus duomenis
+            self.generator.validate_inputs(
+                server_ip=data['server_ip'],
+                vsp1=data['vsp1'],
+                vsp2=data['vsp2'],
+                luns=data['luns']
+            )
+            
+            # Generuojame peržiūrą
             preview = "=== HORCM10.conf ===\n"
-            preview += self.generate_horcm10()
+            preview += self.generator.generate_horcm10(
+                server_ip=data['server_ip'],
+                vsp1=data['vsp1'],
+                luns=data['luns']
+            )
             preview += "\n\n=== HORCM20.conf ===\n"
-            preview += self.generate_horcm20()
-
+            preview += self.generator.generate_horcm20(
+                server_ip=data['server_ip'],
+                vsp2=data['vsp2'],
+                luns=data['luns']
+            )
+            
             self.preview_text.setPlainText(preview)
+            
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to generate configuration: {str(e)}")
+            QMessageBox.critical(self, "Klaida", str(e))
 
     def save_files(self):
-        """Išsaugo sugeneruotus failus"""
-        if not self.validate_inputs():
-            return
-
+        """Išsaugo konfigūracijos failus"""
         try:
+            if not self.validate_inputs():
+                return
+
+            data = self.collect_data()
+            
+            # Validuojame
+            self.generator.validate_inputs(
+                server_ip=data['server_ip'],
+                vsp1=data['vsp1'],
+                vsp2=data['vsp2'],
+                luns=data['luns']
+            )
+            
+            # Pasirenkame išsaugojimo direktoriją
             save_dir = QFileDialog.getExistingDirectory(
                 self,
                 "Select Directory to Save Configuration Files",
                 "",
                 QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks
             )
-
+            
             if save_dir:
+                # Išsaugome failus
                 with open(f"{save_dir}/horcm10.conf", 'w') as f:
-                    f.write(self.generate_horcm10())
-
+                    f.write(self.generator.generate_horcm10(
+                        server_ip=data['server_ip'],
+                        vsp1=data['vsp1'],
+                        luns=data['luns']
+                    ))
+                    
                 with open(f"{save_dir}/horcm20.conf", 'w') as f:
-                    f.write(self.generate_horcm20())
-
+                    f.write(self.generator.generate_horcm20(
+                        server_ip=data['server_ip'],
+                        vsp2=data['vsp2'],
+                        luns=data['luns']
+                    ))
+                    
                 QMessageBox.information(
                     self,
                     "Success",
                     f"Configuration files saved successfully to:\n{save_dir}"
                 )
+                
         except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Error",
-                f"Failed to save configuration files:\n{str(e)}"
-            )
-
-    def generate_horcm10(self):
-        """Generuoja HORCM10.conf turinį"""
-        luns = self.get_lun_values()
-        if not luns:
-            return ""
-
-        # LDEV sekcija
-        ldev_lines = []
-        for lun in luns:
-            ldev_lines.append(f"{lun['group']}    {lun['name']}    "
-                              f"{self.vsp1_serial.text()}    {lun['ldev']}    0")
-
-        # INST sekcija
-        unique_groups = {lun["group"] for lun in luns}
-        inst_lines = []
-        for group in sorted(unique_groups):
-            inst_lines.append(f"{group}    {self.ip_entry.text()}    5020")
-
-        return f"""HORCM_MON
-# ip_address service poll(10ms) timeout(10ms)
-{self.ip_entry.text()}    5010    1000       3000
-
-HORCM_CMD
-# VSP1 (Serial No.: {self.vsp1_serial.text()})
-\\\\.\CMD-{self.vsp1_serial.text()}-{luns[0]['ldev']}
-
-HORCM_LDEV
-# DeviceGroup, DeviceName, Serial#, CU:LDEV(LDEV#), MU#
-{chr(10).join(ldev_lines)}
-
-HORCM_INST
-# DeviceGroup         ip_address      service
-{chr(10).join(inst_lines)}"""
-
-    def generate_horcm20(self):
-        """Generuoja HORCM20.conf turinį"""
-        luns = self.get_lun_values()
-        if not luns:
-            return ""
-
-        # LDEV sekcija
-        ldev_lines = []
-        for lun in luns:
-            ldev_lines.append(f"{lun['group']}    {lun['name']}    "
-                              f"{self.vsp2_serial.text()}    {lun['ldev']}    0")
-
-        # INST sekcija
-        unique_groups = {lun["group"] for lun in luns}
-        inst_lines = []
-        for group in sorted(unique_groups):
-            inst_lines.append(f"{group}    {self.ip_entry.text()}    5010")
-
-        return f"""HORCM_MON
-# ip_address service poll(10ms) timeout(10ms)
-{self.ip_entry.text()}    5020    1000       3000
-
-HORCM_CMD
-# VSP2 (Serial No.: {self.vsp2_serial.text()})
-\\\\.\CMD-{self.vsp2_serial.text()}-{luns[0]['ldev']}
-
-HORCM_LDEV
-# DeviceGroup, DeviceName, Serial#, CU:LDEV(LDEV#), MU#
-{chr(10).join(ldev_lines)}
-
-HORCM_INST
-# DeviceGroup         ip_address      service
-{chr(10).join(inst_lines)}"""
+            QMessageBox.critical(self, "Error", str(e))
 
     def keyPressEvent(self, event):
         """Apdoroja klavišų paspaudimus"""
-        # Ctrl+S - išsaugoti
-        if event.modifiers() & Qt.ControlModifier and event.key() == Qt.Key_S:
-            self.save_files()
-        # Ctrl+P - peržiūra
-        elif event.modifiers() & Qt.ControlModifier and event.key() == Qt.Key_P:
-            self.update_preview()
+        if event.modifiers() & Qt.ControlModifier:
+            if event.key() == Qt.Key_S:
+                self.save_files()
+            elif event.key() == Qt.Key_P:
+                self.update_preview()
         else:
             super().keyPressEvent(event)
 
@@ -1601,13 +1787,27 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(ProStyle.STYLE)
 
         # Nustatome programos ikoną
-        self.setWindowIcon(QIcon("icon.svg"))
+        try:
+            # PyInstaller sukuria temp katalogą ir saugo kelią _MEIPASS
+            if hasattr(sys, '_MEIPASS'):
+                base_path = sys._MEIPASS
+            else:
+                base_path = os.path.dirname(os.path.abspath(__file__))
+                
+            icon_path = os.path.join(base_path, "icon.svg")
+            if os.path.exists(icon_path):
+                self.setWindowIcon(QIcon(icon_path))
+                print(f"Ikona įkelta iš: {icon_path}")
+            else:
+                print(f"Įspėjimas: Ikonos failas nerastas {icon_path}")
+        except Exception as e:
+            print(f"Klaida nustatant ikoną: {e}")
 
         # Sukuriame meniu juostą
         menubar = self.menuBar()
 
         # Help meniu
-        help_menu = menubar.addMenu('Help')
+        help_menu = menubar.addMenu('Update / Help')
         
         # Check for Updates action
         check_updates_action = help_menu.addAction('Check for Updates')
