@@ -6,6 +6,6 @@ __pycache__/
 venv/
 
 # Ignore build output
-/dist/
+#/dist/
 /build/
-/test/
+test/

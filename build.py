@@ -4,9 +4,13 @@ import shutil
 import subprocess
 import venv
 import re
+import zipfile
+import argparse
+import time
 from pathlib import Path
+from typing import Optional, Tuple
 
-def get_version_from_code():
+def get_version_from_code() -> str:
     """Nuskaito versijos numerį iš programos kodo"""
     try:
         with open('GAD manager.py', 'r', encoding='utf-8') as f:
@@ -18,8 +22,22 @@ def get_version_from_code():
         print(f"Nepavyko nuskaityti versijos: {e}")
     return "0.1.0"
 
-def setup_venv():
-    """Sukuria ir sukonfigūruoja virtualią aplinką jei jos nėra"""
+def verify_required_files(work_dir: Path) -> bool:
+    """Patikrina ar yra visi reikalingi failai"""
+    required_files = ['GAD manager.py', 'icon.ico', 'icon.svg']
+    missing_files = []
+
+    for file in required_files:
+        full_path = work_dir / file
+        if not full_path.exists():
+            missing_files.append(file)
+            print(f"Klaida: failas {file} nerastas!")
+            print(f"Ieškota: {full_path}")
+
+    return len(missing_files) == 0
+
+def setup_venv(requirements: Optional[list] = None) -> str:
+    """Sukuria ir sukonfigūruoja virtualią aplinką"""
     python_path = os.path.join('venv', 'Scripts', 'python.exe') if sys.platform == 'win32' else os.path.join('venv', 'bin', 'python')
 
     if os.path.exists(python_path):
@@ -30,12 +48,19 @@ def setup_venv():
     venv.create('venv', with_pip=True)
 
     print("Diegiami reikalingi paketai...")
-
-    packages = [
+    packages = requirements or [
         'pyinstaller',
         'pyqt5',
-        'requests'
+        'requests',
+        'pytest'
     ]
+
+    # Atnaujinamas pip
+    try:
+        subprocess.run([python_path, '-m', 'pip', 'install', '--upgrade', 'pip'], check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Klaida atnaujinant pip: {e}")
+        raise
 
     for package in packages:
         print(f"Diegiamas {package}...")
@@ -47,203 +72,111 @@ def setup_venv():
 
     return python_path
 
-def create_spec_file():
-    """Sukuria PyInstaller specifikacijų failą"""
-    spec_content = """# -*- mode: python ; coding: utf-8 -*-
-
-import os
-import sys
-from PyInstaller.utils.hooks import collect_all, copy_metadata
-
-block_cipher = None
-
-# Reikalingi failai ir resursai
-added_files = [
-    (os.path.abspath('icon.ico'), '.'),
-    (os.path.abspath('icon.svg'), '.')
-]
-
-# Reikalingi PyQt5 moduliai
-qt_modules = [
-    'PyQt5.QtCore',
-    'PyQt5.QtGui',
-    'PyQt5.QtWidgets'
-]
-
-# Surenkame tik reikalingas PyQt5 priklausomybes
-datas = added_files.copy()
-binaries = []
-
-# Įtraukiame visus reikalingus hiddenimports
-hiddenimports = [
-    'PyQt5.sip',
-    'PyQt5.QtCore',
-    'PyQt5.QtGui',
-    'PyQt5.QtWidgets'
-]
-
-# Pridedame PyQt5 metaduomenis
-datas += copy_metadata('PyQt5')
-
-# Surenkame PyQt5 modulius
-for module in qt_modules:
-    imports = collect_all(module)
-    datas.extend(imports[0])
-    binaries.extend(imports[1])
-    hiddenimports.extend(imports[2])
-
-a = Analysis(
-    ['GAD manager.py'],
-    pathex=[os.path.abspath(os.getcwd())],
-    binaries=binaries,
-    datas=datas,
-    hiddenimports=hiddenimports,
-    hookspath=[],
-    hooksconfig={},
-    runtime_hooks=[],
-    excludes=[
-        'PyQt5.QtWebEngine',
-        'PyQt5.QtWebEngineCore',
-        'PyQt5.QtMultimedia',
-        'PyQt5.QtNetwork',
-        'PyQt5.QtBluetooth',
-        'PyQt5.QtDBus',
-        'PyQt5.QtDesigner',
-        'PyQt5.QtHelp',
-        'PyQt5.QtLocation',
-        'PyQt5.QtMultimediaWidgets',
-        'PyQt5.QtNfc',
-        'PyQt5.QtOpenGL',
-        'PyQt5.QtPositioning',
-        'PyQt5.QtQml',
-        'PyQt5.QtQuick',
-        'PyQt5.QtQuickWidgets',
-        'PyQt5.QtSensors',
-        'PyQt5.QtSerialPort',
-        'PyQt5.QtSql',
-        'PyQt5.QtTest',
-        'PyQt5.QtWebChannel',
-        'PyQt5.QtWebSockets',
-        'PyQt5.QtXml',
-        'PyQt5.QtXmlPatterns'
-    ],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
-    noarchive=False
-)
-
-# Šaliname nereikalingus Qt plugins
-excluded_plugins = [
-    'qt5webkit',
-    'qt5quick',
-    'qt53d',
-    'platformthemes',
-    'audio',
-    'mediaservice',
-    'playlistformats',
-    'position',
-    'renderplugins',
-    'sceneparsers',
-    'sensors',
-    'sensorgestures',
-    'sqldrivers',
-    'texttospeech',
-    'webview'
-]
-
-for plugin in excluded_plugins:
-    for item in a.binaries.copy():
-        if plugin in item[0].lower():
-            a.binaries.remove(item)
-
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
-
-exe = EXE(
-    pyz,
-    a.scripts,
-    [],
-    exclude_binaries=True,
-    name='GADManager',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    console=False,
-    disable_windowed_traceback=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon=os.path.abspath('icon.ico'),
-    uac_admin=False
-)
-
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name='GADManager'
-)
-"""
-
-    with open('GADManager.spec', 'w', encoding='utf-8') as f:
-        f.write(spec_content)
-
-def main():
-    """Pagrindinis kompiliavimo procesas"""
-    work_dir = Path.cwd()
-    print(f"Darbinis katalogas: {work_dir}")
-
-    # Išvalome tik build ir dist katalogus
-    for dir_name in ['dist', 'build']:
+def clean_build_directories():
+    """Išvalo build ir dist katalogus"""
+    for dir_name in ['dist', 'build', '__pycache__']:
         if os.path.exists(dir_name):
-            shutil.rmtree(dir_name)
-            print(f"Išvalytas {dir_name} katalogas")
+            attempts = 3
+            for attempt in range(attempts):
+                try:
+                    print(f"Valomas {dir_name} katalogas...")
+                    shutil.rmtree(dir_name)
+                    print(f"Išvalytas {dir_name} katalogas")
+                    break
+                except PermissionError:
+                    if attempt < attempts - 1:
+                        print(f"Klaida trinant {dir_name}, bandoma dar kartą...")
+                        time.sleep(1)
+                    else:
+                        print(f"Nepavyko išvalyti {dir_name} katalogo po {attempts} bandymų")
+                        raise
+    
+    # Išvalome .pyc failus
+    for pyc_file in Path().rglob("*.pyc"):
+        try:
+            pyc_file.unlink()
+        except Exception as e:
+            print(f"Nepavyko ištrinti {pyc_file}: {e}")
 
-    # Patikriname ar yra visi reikalingi failai
-    required_files = ['GAD manager.py', 'icon.ico', 'icon.svg']
-    for file in required_files:
-        full_path = os.path.join(work_dir, file)
-        if not os.path.exists(full_path):
-            print(f"Klaida: nerastas failas {file}!")
-            print(f"Ieškota: {full_path}")
-            return
-        else:
-            print(f"Rastas failas: {file}")
-
+def build_executable(python_path: str) -> bool:
+    """Sukuria vykdomąjį failą su PyInstaller"""
+    print("Pradedama kompiliacija...")
     try:
-        # Naudojame arba sukuriame virtualią aplinką
-        python_path = setup_venv()
-
-        # Sukuriame spec failą
-        create_spec_file()
-        print("Sukurtas spec failas")
-
-        # Paleidžiame PyInstaller
-        print("Pradedamas kompiliavimas...")
         subprocess.run([
             python_path,
             '-m',
             'PyInstaller',
-            'GADManager.spec',
+            'GAD Manager.spec',
             '--clean',
             '--noconfirm'
         ], check=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"PyInstaller klaida: {e}")
+        return False
+    except Exception as e:
+        print(f"Kompiliacijos klaida: {e}")
+        return False
 
-        # Patikriname ar sukurtas exe turi reikiamus resursus
-        dist_path = work_dir / 'dist' / 'GADManager'
-        for file in ['icon.ico', 'icon.svg']:
-            if os.path.exists(os.path.join(dist_path, file)):
-                print(f"Resursas rastas dist kataloge: {file}")
-            else:
-                print(f"ĮSPĖJIMAS: Resursas nerastas dist kataloge: {file}")
+def create_release_zip(version: str, work_dir: Path) -> Path:
+    """Sukuria ZIP failą GitHub išleidimui"""
+    release_name = f"GADManager-v{version}"
+    zip_path = work_dir / f"{release_name}.zip"
+    
+    # Paimame .exe iš dist katalogo
+    exe_path = work_dir / 'dist' / 'GADManager' / 'GADManager.exe'
+    if not exe_path.exists():
+        raise FileNotFoundError(f"Vykdomasis failas nerastas: {exe_path}")
+        
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        # Pridedame vykdomąjį failą ir visus kitus failus iš dist/GADManager katalogo
+        dist_dir = work_dir / 'dist' / 'GADManager'
+        for root, _, files in os.walk(dist_dir):
+            for file in files:
+                file_path = Path(root) / file
+                arcname = os.path.relpath(file_path, dist_dir)
+                zipf.write(file_path, arcname)
+        
+        # Pridedame ikonų failus
+        for icon_file in ['icon.ico', 'icon.svg']:
+            icon_path = work_dir / icon_file
+            if icon_path.exists():
+                zipf.write(icon_path, icon_file)
+    
+    return zip_path
 
-        print("Kompiliavimas baigtas!")
-        print("\nProgramos vykdomasis failas turėtų būti:", dist_path)
+def main():
+    """Pagrindinis build procesas"""
+    work_dir = Path.cwd()
+    print(f"Darbinis katalogas: {work_dir}")
+    
+    # Automatiškai išvalome prieš kiekvieną build'ą
+    print("\nPradedamas aplinkos valymas...")
+    clean_build_directories()
+    print("Aplinkos valymas baigtas\n")
+
+    # Gauname programos versiją
+    version = get_version_from_code()
+    print(f"Kompiliuojama versija: {version}")
+
+    try:
+        # Sukonfigūruojame virtualią aplinką
+        python_path = setup_venv()
+
+        # Patikriname reikalingus failus
+        if not verify_required_files(work_dir):
+            sys.exit(1)
+
+        # Sukuriame vykdomąjį failą
+        if not build_executable(python_path):
+            sys.exit(1)
+
+        # Sukuriame ZIP 
+        zip_path = create_release_zip(version, work_dir)
+        print(f"\nSukurtas ZIP failas: {zip_path}")
+
+        print("\nKompiliacija sėkmingai baigta!")
+        print("\nDabar galite įkelti failus į GitHub.")
 
     except Exception as e:
         print(f"Įvyko klaida: {e}")
